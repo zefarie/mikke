@@ -161,71 +161,90 @@ struct FileEntry {
     size: i64,
 }
 
-/// Parcourt `corpus` et liste les fichiers supportés avec leurs métadonnées.
-fn collect_files(corpus: &Path, stats: &mut IndexStats) -> Vec<FileEntry> {
+/// Parcourt les racines et liste les fichiers supportés avec leurs
+/// métadonnées. Les racines peuvent se recouvrir : chaque fichier ne sort
+/// qu'une fois. Tout chemin sous `excludes` est ignoré.
+fn collect_files(
+    roots: &[PathBuf],
+    excludes: &[PathBuf],
+    stats: &mut IndexStats,
+) -> Vec<FileEntry> {
     let mut files = Vec::new();
+    let mut collected: HashSet<PathBuf> = HashSet::new();
     let code_dirs = std::cell::Cell::new(0usize);
-    let walker = WalkDir::new(corpus).into_iter().filter_entry(|e| {
-        if e.depth() == 0 || !e.file_type().is_dir() {
-            return true;
-        }
-        let name = e.file_name().to_string_lossy();
-        if name.starts_with('.') || SKIPPED_DIRS.contains(&name.as_ref()) {
-            return false;
-        }
-        if is_code_project(e.path()) {
-            code_dirs.set(code_dirs.get() + 1);
-            return false;
-        }
-        true
-    });
-    for entry in walker {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                eprintln!("warn: entrée illisible, ignorée ({e})");
-                stats.files_failed += 1;
+    for root in roots {
+        let walker = WalkDir::new(root).into_iter().filter_entry(|e| {
+            if excludes.iter().any(|x| e.path().starts_with(x)) {
+                return false;
+            }
+            if e.depth() == 0 || !e.file_type().is_dir() {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            if name.starts_with('.') || SKIPPED_DIRS.contains(&name.as_ref()) {
+                return false;
+            }
+            if is_code_project(e.path()) {
+                code_dirs.set(code_dirs.get() + 1);
+                return false;
+            }
+            true
+        });
+        for entry in walker {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("warn: entrée illisible, ignorée ({e})");
+                    stats.files_failed += 1;
+                    continue;
+                }
+            };
+            if !entry.file_type().is_file() {
                 continue;
             }
-        };
-        if !entry.file_type().is_file() {
-            continue;
+            if !extract::supported(entry.path()) {
+                stats.files_skipped += 1;
+                continue;
+            }
+            let Ok(meta) = entry.metadata() else {
+                stats.files_failed += 1;
+                continue;
+            };
+            if meta.len() > MAX_FILE_BYTES {
+                stats.files_skipped += 1;
+                continue;
+            }
+            let mtime_ns = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as i64)
+                .unwrap_or(0);
+            let path = entry.into_path();
+            if !collected.insert(path.clone()) {
+                continue; // racines imbriquées : déjà vu
+            }
+            files.push(FileEntry {
+                path,
+                mtime_ns,
+                size: meta.len() as i64,
+            });
         }
-        if !extract::supported(entry.path()) {
-            stats.files_skipped += 1;
-            continue;
-        }
-        let Ok(meta) = entry.metadata() else {
-            stats.files_failed += 1;
-            continue;
-        };
-        if meta.len() > MAX_FILE_BYTES {
-            stats.files_skipped += 1;
-            continue;
-        }
-        let mtime_ns = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-        files.push(FileEntry {
-            path: entry.into_path(),
-            mtime_ns,
-            size: meta.len() as i64,
-        });
     }
     stats.code_dirs_skipped = code_dirs.get();
     files
 }
 
-/// Met à jour (ou construit) l'index de `corpus` dans `index_dir`.
+/// Met à jour (ou construit) l'index des racines `roots` dans `index_dir`.
+/// Un fichier de l'index qui n'apparaît plus sous aucune racine (supprimé
+/// du disque, ou racine retirée de la config) est retiré de l'index.
 ///
 /// Avec un `Embedder`, les nouveaux chunks sont embeddés et l'index HNSW
 /// reconstruit ; sans (modèle absent), l'index reste utilisable en BM25.
 /// `full` force une reconstruction complète.
 pub fn build_index(
-    corpus: &Path,
+    roots: &[PathBuf],
+    excludes: &[PathBuf],
     index_dir: &Path,
     embedder: Option<&Embedder>,
     full: bool,
@@ -261,7 +280,7 @@ pub fn build_index(
 
     let mut writer = index.writer(WRITER_HEAP_BYTES)?;
     let mut stats = IndexStats::default();
-    let files = collect_files(corpus, &mut stats);
+    let files = collect_files(roots, excludes, &mut stats);
 
     let mut seen: HashSet<String> = HashSet::with_capacity(files.len());
 
