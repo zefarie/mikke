@@ -35,20 +35,68 @@ pub struct SearchHit {
     pub highlights: Vec<Range<usize>>,
 }
 
+/// Index ouvert, prêt à répondre à plusieurs requêtes. C'est la forme à
+/// utiliser pour tout usage interactif (TUI, futur serveur MCP) : ouvrir
+/// l'index — et surtout recharger le graphe HNSW — à chaque requête serait
+/// du gaspillage.
+pub struct Searcher {
+    index: tantivy::Index,
+    reader: tantivy::IndexReader,
+    vectors: Option<VectorIndex>,
+}
+
+impl Searcher {
+    pub fn open(index_dir: &Path) -> tantivy::Result<Self> {
+        let index = open_index(index_dir)?;
+        let reader = index.reader()?;
+        let vectors = match VectorIndex::open(index_dir) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("warn: {e}");
+                None
+            }
+        };
+        Ok(Self {
+            index,
+            reader,
+            vectors,
+        })
+    }
+
+    pub fn search(
+        &self,
+        query_str: &str,
+        limit: usize,
+        embedder: Option<&Embedder>,
+    ) -> tantivy::Result<Vec<SearchHit>> {
+        search_open(self, query_str, limit, embedder)
+    }
+}
+
+/// Recherche « one-shot » : ouvre l'index, cherche, referme.
 pub fn search(
     index_dir: &Path,
     query_str: &str,
     limit: usize,
     embedder: Option<&Embedder>,
 ) -> tantivy::Result<Vec<SearchHit>> {
-    let index = open_index(index_dir)?;
+    Searcher::open(index_dir)?.search(query_str, limit, embedder)
+}
+
+fn search_open(
+    open: &Searcher,
+    query_str: &str,
+    limit: usize,
+    embedder: Option<&Embedder>,
+) -> tantivy::Result<Vec<SearchHit>> {
+    let index = &open.index;
     let schema = index.schema();
     let f_path = schema.get_field("path").expect("champ path");
     let f_chunk_id = schema.get_field("chunk_id").expect("champ chunk_id");
     let f_body = schema.get_field("body").expect("champ body");
 
-    let searcher = index.reader()?.searcher();
-    let parser = QueryParser::for_index(&index, vec![f_body]);
+    let searcher = open.reader.searcher();
+    let parser = QueryParser::for_index(index, vec![f_body]);
     // lenient : une requête utilisateur n'est jamais une erreur de syntaxe
     let (query, _) = parser.parse_query_lenient(query_str);
 
@@ -67,14 +115,10 @@ pub fn search(
 
     // côté vecteurs : voisins du même embedding que l'index
     let mut lists = vec![bm25_ranked];
-    if let Some(embedder) = embedder {
-        match VectorIndex::open(index_dir) {
-            Ok(Some(vectors)) => match embedder.embed(query_str) {
-                Ok(qvec) => lists.push(vectors.search(&qvec, CHUNK_POOL)),
-                Err(e) => eprintln!("warn: embedding de la requête impossible ({e})"),
-            },
-            Ok(None) => {}
-            Err(e) => eprintln!("warn: {e}"),
+    if let (Some(embedder), Some(vectors)) = (embedder, open.vectors.as_ref()) {
+        match embedder.embed(query_str) {
+            Ok(qvec) => lists.push(vectors.search(&qvec, CHUNK_POOL)),
+            Err(e) => eprintln!("warn: embedding de la requête impossible ({e})"),
         }
     }
 
