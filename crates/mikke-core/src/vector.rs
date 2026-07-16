@@ -83,11 +83,17 @@ impl VectorIndex {
         Ok(Some(Self { index }))
     }
 
-    /// Ids de chunks les plus proches, du meilleur au moins bon.
-    pub fn search(&self, query: &[f32], k: usize) -> Vec<u64> {
+    /// (id de chunk, similarité cosinus), du meilleur au moins bon.
+    pub fn search(&self, query: &[f32], k: usize) -> Vec<(u64, f32)> {
         self.index
             .search(query, k)
-            .map(|m| m.keys)
+            .map(|m| {
+                m.keys
+                    .into_iter()
+                    .zip(m.distances)
+                    .map(|(id, d)| (id, 1.0 - d))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
