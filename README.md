@@ -62,14 +62,31 @@ Design rules, in order:
 | Runtime deps | none           | Docker         | Java stack           | n/a         |
 | Made for     | your documents | your documents | enterprise           | code & docs |
 
+## Install
+
+Not packaged yet — from source it's one line (Rust 1.85+):
+
+```console
+$ cargo install --locked --git https://github.com/zefarie/mikke mikke-cli
+```
+
+The first `mikke index` fetches the multilingual embedding model (~500 MB,
+one time). Everything after that is offline.
+
 ## Status
 
-Early days, nothing to install yet. The v1 checklist:
+The v1 feature set is in:
 
-- [ ] `mikke index <dir>` — incremental indexing (mtime + blake3)
-- [ ] `mikke "<query>"` — hybrid search, highlighted excerpts, `--json` for scripts
-- [ ] `mikke tui` — fzf-style live search, Enter opens the file
-- [ ] PDF, DOCX, Markdown, TXT, HTML
+- [x] `mikke index <dir>` — incremental indexing (mtime + blake3), only
+      changed files are re-read
+- [x] `mikke "<query>"` — hybrid search (BM25 + embeddings, rank fusion),
+      highlighted excerpts, `--json` for scripts
+- [x] `mikke tui` — fzf-style live search, Enter opens the file
+- [x] PDF, DOCX, Markdown, TXT, HTML
+
+Measured numbers live in [BENCHMARKS.md](BENCHMARKS.md); search quality is
+tracked by 20 reference queries in [eval/](eval/) (hit@10: 19/20 hybrid
+vs 18/20 BM25 alone).
 
 ## The name
 
