@@ -1,0 +1,15 @@
+[package]
+name = "mikke-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+tantivy = "0.26.1"
+thiserror = "2.0.18"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"
