@@ -1,14 +1,24 @@
-<div align="center">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="a magnifying glass finding the one orange dot in a grid" width="150">
+  </picture>
+</p>
 
-# mikke
+<h1 align="center">mikke</h1>
 
-**Type what you remember. Get the file.**
+<p align="center">
+  <b>Type what you remember. Get the file.</b><br>
+  Local semantic search for the documents on your disk.
+</p>
 
-Local semantic search for the documents on your disk.
+<p align="center">
+  <img src="https://img.shields.io/badge/made%20with-rust-B7410E?style=flat-square&logo=rust&logoColor=white" alt="made with rust">
+  <img src="https://img.shields.io/badge/status-early%20days-EB5E28?style=flat-square" alt="status: early days">
+  <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-6B655E?style=flat-square" alt="license: MIT or Apache-2.0">
+</p>
 
 <!-- demo.gif -->
-
-</div>
 
 ---
 
