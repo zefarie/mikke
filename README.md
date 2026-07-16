@@ -86,7 +86,7 @@ The v1 feature set is in:
 
 Measured numbers live in [BENCHMARKS.md](BENCHMARKS.md); search quality is
 tracked by 20 reference queries in [eval/](eval/) (hit@10: 19/20 hybrid
-vs 18/20 BM25 alone).
+vs 16/20 BM25 alone).
 
 ## The name
 

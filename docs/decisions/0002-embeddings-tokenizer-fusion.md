@@ -80,7 +80,7 @@ la recherche dégrade proprement en BM25 seul — mikke répond toujours.
 
 |  | BM25 seul | hybride |
 |---|---:|---:|
-| hit@10 | 18/20 | **19/20** |
+| hit@10 | 16/20 | **19/20** |
 | hit@1 | — | 17/20 |
 
 Les requêtes sémantiques justifient l'hybride : « mon salaire au

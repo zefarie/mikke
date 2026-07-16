@@ -44,7 +44,7 @@ fixtures `.pdf`/`.docx`/`.html` du dépôt — 149 Mo au total, 49 628 chunks.
 
 20 requêtes de référence (`eval/queries.toml`, `cargo run --release -p
 mikke-core --example eval`) : hybride **19/20** en hit@10 (17/20 au rang 1)
-contre 18/20 pour BM25 seul. L'échec restant est volontairement difficile :
+contre 16/20 pour BM25 seul (les stopwords FR/EN coûtent deux requêtes au mode dégradé sans modèle, mais suppriment les faux positifs du mode hybride). L'échec restant est volontairement difficile :
 requête française vers un document anglais.
 
 ## D'où viennent les millisecondes
