@@ -220,6 +220,12 @@ fn cmd_index(dir: &Path, index_dir: &Path, full: bool) -> Result<()> {
         parts.push(format!("{} retirés", stats.files_deleted));
     }
     parts.push(format!("{} ignorés", stats.files_skipped));
+    if stats.code_dirs_skipped > 0 {
+        parts.push(format!(
+            "{} dossiers de code sautés",
+            stats.code_dirs_skipped
+        ));
+    }
     if stats.files_failed > 0 {
         parts.push(format!("{} illisibles", stats.files_failed));
     }
