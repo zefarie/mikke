@@ -15,24 +15,39 @@ use mikke_core::{Embedder, SearchHit};
 const MODEL_NAME: &str = "potion-multilingual-128M";
 const MODEL_BASE_URL: &str =
     "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main";
-const MODEL_FILES: &[&str] = &["config.json", "tokenizer.json", "model.safetensors"];
+/// (fichier, SHA-256 attendu) : le modèle est épinglé, un téléchargement
+/// altéré (miroir compromis, proxy, coupure) est refusé et supprimé.
+const MODEL_FILES: &[(&str, &str)] = &[
+    (
+        "config.json",
+        "595e4cab2093732efd5dbe084fd5c1826b5eea693b73b4c1fd971672867d2e54",
+    ),
+    (
+        "tokenizer.json",
+        "19f1909063da3cfe3bd83a782381f040dccea475f4816de11116444a73e1b6a1",
+    ),
+    (
+        "model.safetensors",
+        "14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397",
+    ),
+];
 
 #[derive(Parser)]
 #[command(
     name = "mikke",
     version,
-    about = "Retrouve n'importe quel fichier que tu sais décrire.",
+    about = "Find any file you can describe.",
     args_conflicts_with_subcommands = true
 )]
 struct Cli {
-    /// Requête en langage naturel, ex : mikke "facture vétérinaire janvier"
+    /// Natural-language query, e.g. mikke "vet invoice january"
     query: Vec<String>,
 
-    /// Sortie JSON, pour scripter
+    /// JSON output, for scripting
     #[arg(long)]
     json: bool,
 
-    /// Nombre de résultats
+    /// Number of results
     #[arg(long, default_value_t = 10)]
     top: usize,
 
@@ -42,17 +57,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Indexe les racines configurées ; avec <DIR>, ajoute d'abord la racine
+    /// Index the configured roots; with <DIR>, add it as a root first
     Index {
         dir: Option<PathBuf>,
-        /// Reconstruit tout l'index de zéro
+        /// Rebuild the whole index from scratch
         #[arg(long)]
         full: bool,
     },
-    /// Surveille les racines et garde l'index frais (service systemd : contrib/)
+    /// Watch the roots and keep the index fresh (systemd unit: contrib/)
     Watch,
-    /// Recherche interactive plein écran, style fzf
+    /// Interactive full-screen search, fzf style
     Tui,
+    /// Print shell completions (bash, zsh, fish, …)
+    Completions { shell: clap_complete::Shell },
 }
 
 fn data_dir() -> PathBuf {
@@ -81,7 +98,7 @@ fn model_dir() -> PathBuf {
 }
 
 fn model_present(dir: &Path) -> bool {
-    MODEL_FILES.iter().all(|f| dir.join(f).exists())
+    MODEL_FILES.iter().all(|(f, _)| dir.join(f).exists())
 }
 
 /// Télécharge le modèle d'embeddings au premier run (une seule fois).
@@ -90,21 +107,21 @@ fn ensure_model(dir: &Path) -> Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(dir)?;
-    eprintln!(
-        "premier lancement : téléchargement du modèle {MODEL_NAME} (~500 Mo, une seule fois)"
-    );
-    for file in MODEL_FILES {
+    eprintln!("first run: downloading the {MODEL_NAME} embedding model (~500 MB, once)");
+    for (file, sha256) in MODEL_FILES {
         let dest = dir.join(file);
         if dest.exists() {
             continue;
         }
-        download(&format!("{MODEL_BASE_URL}/{file}"), &dest)
-            .with_context(|| format!("téléchargement de {file} impossible"))?;
+        download(&format!("{MODEL_BASE_URL}/{file}"), &dest, sha256)
+            .with_context(|| format!("failed to download {file}"))?;
     }
     Ok(())
 }
 
-fn download(url: &str, dest: &Path) -> Result<()> {
+fn download(url: &str, dest: &Path, expected_sha256: &str) -> Result<()> {
+    use sha2::Digest;
+
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
     let mut resp = ureq::get(url).call()?;
     let total: Option<u64> = resp
@@ -116,6 +133,7 @@ fn download(url: &str, dest: &Path) -> Result<()> {
 
     let tmp = dest.with_extension("part");
     let mut out = std::fs::File::create(&tmp)?;
+    let mut hasher = sha2::Sha256::new();
     let mut buf = vec![0u8; 1 << 16];
     let mut done: u64 = 0;
     let mut last_pct: i64 = -1;
@@ -125,17 +143,32 @@ fn download(url: &str, dest: &Path) -> Result<()> {
             break;
         }
         out.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
         done += n as u64;
         if let Some(total) = total {
             let pct = (done * 100 / total.max(1)) as i64;
             if pct != last_pct {
-                eprint!("\r  {name} : {pct}%");
+                eprint!("\r  {name}: {pct}%");
                 last_pct = pct;
             }
         }
     }
     out.flush()?;
-    eprintln!("\r  {name} : ok      ");
+    drop(out);
+
+    let actual: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    if actual != expected_sha256 {
+        let _ = std::fs::remove_file(&tmp);
+        bail!(
+            "checksum mismatch for {name} (got {actual}, expected {expected_sha256}) — \
+             download discarded, try again"
+        );
+    }
+    eprintln!("\r  {name}: ok (sha256 verified)");
     std::fs::rename(&tmp, dest)?;
     Ok(())
 }
@@ -150,7 +183,7 @@ fn main() -> std::process::ExitCode {
             {
                 return std::process::ExitCode::SUCCESS;
             }
-            eprintln!("erreur : {e:#}");
+            eprintln!("error: {e:#}");
             std::process::ExitCode::FAILURE
         }
     }
@@ -174,9 +207,13 @@ fn run() -> Result<()> {
         }
         Some(Command::Tui) => {
             if !index_dir.exists() {
-                bail!("aucun index — lance d'abord : mikke index ~/Documents");
+                bail!("no index yet — run: mikke index ~/Documents");
             }
             tui::run(&index_dir, load_embedder(false))
+        }
+        Some(Command::Completions { shell }) => {
+            clap_complete::generate(shell, &mut Cli::command(), "mikke", &mut std::io::stdout());
+            Ok(())
         }
         None if cli.query.is_empty() => {
             Cli::command().print_help()?;
@@ -193,19 +230,19 @@ fn load_embedder(download_if_missing: bool) -> Option<Embedder> {
     if !model_present(&dir) {
         if !download_if_missing {
             eprintln!(
-                "note : modèle d'embeddings absent, recherche BM25 seule (lance `mikke index` pour le télécharger)"
+                "note: embedding model missing, BM25-only search (run `mikke index` to download it)"
             );
             return None;
         }
         if let Err(e) = ensure_model(&dir) {
-            eprintln!("warn: {e:#} — indexation en BM25 seul");
+            eprintln!("warn: {e:#} — indexing in BM25-only mode");
             return None;
         }
     }
     match Embedder::load(&dir) {
         Ok(e) => Some(e),
         Err(e) => {
-            eprintln!("warn: modèle inutilisable ({e}) — BM25 seul");
+            eprintln!("warn: unusable model ({e}) — BM25 only");
             None
         }
     }
@@ -218,14 +255,14 @@ fn checked_roots(config: &Config) -> Result<Vec<PathBuf>> {
     let roots = config.root_paths();
     if roots.is_empty() {
         bail!(
-            "aucune racine configurée — lance : mikke index ~/Documents\n(config : {})",
+            "no roots configured — run: mikke index ~/Documents\n(config: {})",
             config::config_path().display()
         );
     }
     for root in &roots {
         if !root.is_dir() {
             bail!(
-                "racine introuvable : {} (disque non monté ? retire-la de {})",
+                "root not found: {} (drive not mounted? remove it from {})",
                 root.display(),
                 config::config_path().display()
             );
@@ -239,11 +276,11 @@ fn cmd_index(dir: Option<&Path>, index_dir: &Path, full: bool) -> Result<()> {
     if let Some(dir) = dir {
         let dir = dir
             .canonicalize()
-            .with_context(|| format!("dossier introuvable : {}", dir.display()))?;
+            .with_context(|| format!("folder not found: {}", dir.display()))?;
         if config.add_root(&dir) {
             config.save()?;
             eprintln!(
-                "racine ajoutée : {} ({} au total — config : {})",
+                "root added: {} ({} total — config: {})",
                 config::contract(&dir),
                 config.roots.len(),
                 config::config_path().display()
@@ -260,32 +297,29 @@ fn cmd_index(dir: Option<&Path>, index_dir: &Path, full: bool) -> Result<()> {
         embedder.as_ref(),
         full,
     )
-    .context("indexation impossible")?;
+    .context("indexing failed")?;
     let mut parts = vec![format!(
-        "{} fichiers indexés ({} chunks{})",
+        "{} files indexed ({} chunks{})",
         stats.files_indexed,
         stats.chunks,
         if stats.vectors {
-            ", BM25 + vecteurs"
+            ", BM25 + vectors"
         } else {
-            ", BM25 seul"
+            ", BM25 only"
         }
     )];
     if stats.files_unchanged > 0 {
-        parts.push(format!("{} inchangés", stats.files_unchanged));
+        parts.push(format!("{} unchanged", stats.files_unchanged));
     }
     if stats.files_deleted > 0 {
-        parts.push(format!("{} retirés", stats.files_deleted));
+        parts.push(format!("{} removed", stats.files_deleted));
     }
-    parts.push(format!("{} ignorés", stats.files_skipped));
+    parts.push(format!("{} skipped", stats.files_skipped));
     if stats.code_dirs_skipped > 0 {
-        parts.push(format!(
-            "{} dossiers de code sautés",
-            stats.code_dirs_skipped
-        ));
+        parts.push(format!("{} code dirs skipped", stats.code_dirs_skipped));
     }
     if stats.files_failed > 0 {
-        parts.push(format!("{} illisibles", stats.files_failed));
+        parts.push(format!("{} unreadable", stats.files_failed));
     }
     println!(
         "{} — {:.1}s",
@@ -297,11 +331,11 @@ fn cmd_index(dir: Option<&Path>, index_dir: &Path, full: bool) -> Result<()> {
 
 fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<()> {
     if !index_dir.exists() {
-        bail!("aucun index — lance d'abord : mikke index ~/Documents");
+        bail!("no index yet — run: mikke index ~/Documents");
     }
     let embedder = load_embedder(false);
-    let hits = mikke_core::search(index_dir, query, top, embedder.as_ref())
-        .context("recherche impossible")?;
+    let hits =
+        mikke_core::search(index_dir, query, top, embedder.as_ref()).context("search failed")?;
 
     let mut out = std::io::stdout().lock();
     if json {
@@ -313,7 +347,7 @@ fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<(
         return Ok(());
     }
     if hits.is_empty() {
-        eprintln!("rien trouvé pour « {query} »");
+        eprintln!("nothing found for \"{query}\"");
         return Ok(());
     }
 
@@ -323,7 +357,7 @@ fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<(
         .unwrap_or(100)
         .max(40);
     if embedder.is_some() && mikke_core::search::low_confidence(&hits) {
-        eprintln!("(correspondance faible — rien ne colle vraiment à « {query} »)");
+        eprintln!("(weak match — nothing really fits \"{query}\")");
     }
     for (rank, hit) in hits.iter().enumerate() {
         print_hit(&mut out, rank + 1, hit, color, width)?;
