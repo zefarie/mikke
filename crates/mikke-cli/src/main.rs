@@ -201,12 +201,8 @@ fn cmd_index(dir: &Path, index_dir: &Path, full: bool) -> Result<()> {
         .with_context(|| format!("dossier introuvable : {}", dir.display()))?;
     let embedder = load_embedder(true);
     let start = Instant::now();
-    // pdf-extract panique sur les PDF tordus : le panic est déjà converti en
-    // erreur comptée « illisible », inutile d'imprimer une backtrace par fichier
-    std::panic::set_hook(Box::new(|_| {}));
     let stats = mikke_core::build_index(&dir, index_dir, embedder.as_ref(), full)
         .with_context(|| format!("indexation de {} impossible", dir.display()))?;
-    let _ = std::panic::take_hook();
     let mut parts = vec![format!(
         "{} fichiers indexés ({} chunks{})",
         stats.files_indexed,
