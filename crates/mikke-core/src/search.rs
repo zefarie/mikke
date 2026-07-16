@@ -101,26 +101,39 @@ fn search_open(
     let f_chunk_id = schema.get_field("chunk_id").expect("champ chunk_id");
     let f_body = schema.get_field("body").expect("champ body");
 
+    // le nom de fichier participe au score (index d'avant : champ absent)
+    let mut fields = vec![f_body];
+    let f_filename = schema.get_field("filename").ok();
+    if let Some(f) = f_filename {
+        fields.push(f);
+    }
+    let boost_filename = |parser: &mut QueryParser| {
+        if let Some(f) = f_filename {
+            parser.set_field_boost(f, 2.0);
+        }
+    };
+
     let searcher = open.reader.searcher();
-    let parser = QueryParser::for_index(index, vec![f_body]);
+    let mut parser = QueryParser::for_index(index, fields.clone());
+    boost_filename(&mut parser);
     // lenient : une requête utilisateur n'est jamais une erreur de syntaxe
     let (query, _) = parser.parse_query_lenient(query_str);
 
-    // côté BM25 : chunks classés + documents déjà récupérés
+    // même requête en conjonction : ne remonte que les documents qui
+    // contiennent TOUS les termes — dans la fusion, ils écrasent ceux qui
+    // n'ont accroché qu'une miette (« 9 » dans un log, par exemple)
+    let mut and_parser = QueryParser::for_index(index, fields);
+    boost_filename(&mut and_parser);
+    and_parser.set_conjunction_by_default();
+    let (and_query, _) = and_parser.parse_query_lenient(query_str);
+
     let mut docs_by_id: HashMap<u64, TantivyDocument> = HashMap::new();
-    let mut bm25_ranked: Vec<u64> = Vec::new();
-    for (_score, addr) in
-        searcher.search(&query, &TopDocs::with_limit(CHUNK_POOL).order_by_score())?
-    {
-        let doc: TantivyDocument = searcher.doc(addr)?;
-        if let Some(id) = doc.get_first(f_chunk_id).and_then(|v| v.as_u64()) {
-            bm25_ranked.push(id);
-            docs_by_id.insert(id, doc);
-        }
-    }
+    let mut lists = vec![
+        collect_ranked(&searcher, &*and_query, f_chunk_id, &mut docs_by_id)?,
+        collect_ranked(&searcher, &*query, f_chunk_id, &mut docs_by_id)?,
+    ];
 
     // côté vecteurs : voisins du même embedding que l'index
-    let mut lists = vec![bm25_ranked];
     if let (Some(embedder), Some(vectors)) = (embedder, open.vectors.as_ref()) {
         match embedder.embed(query_str) {
             Ok(qvec) => lists.push(vectors.search(&qvec, CHUNK_POOL)),
@@ -180,6 +193,26 @@ fn search_open(
         }
     }
     Ok(hits)
+}
+
+/// Chunks classés pour une requête tantivy, documents mémorisés au passage.
+fn collect_ranked(
+    searcher: &tantivy::Searcher,
+    query: &dyn tantivy::query::Query,
+    f_chunk_id: tantivy::schema::Field,
+    docs_by_id: &mut HashMap<u64, TantivyDocument>,
+) -> tantivy::Result<Vec<u64>> {
+    let mut ranked = Vec::new();
+    for (_score, addr) in
+        searcher.search(query, &TopDocs::with_limit(CHUNK_POOL).order_by_score())?
+    {
+        let doc: TantivyDocument = searcher.doc(addr)?;
+        if let Some(id) = doc.get_first(f_chunk_id).and_then(|v| v.as_u64()) {
+            ranked.push(id);
+            docs_by_id.entry(id).or_insert(doc);
+        }
+    }
+    Ok(ranked)
 }
 
 /// Récupère un chunk par son id (hits venus du seul index vectoriel).
