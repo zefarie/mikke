@@ -23,6 +23,12 @@ use crate::vector::VectorIndex;
 /// Combien de chunks chaque côté ramène avant fusion.
 const CHUNK_POOL: usize = 50;
 const SNIPPET_MAX_CHARS: usize = 240;
+/// En dessous de cette fraction du meilleur score RRF, un résultat est
+/// écarté. Effet : quand BM25 et les vecteurs s'accordent sur une tête de
+/// liste, la queue qui n'a été vue que par un seul des deux (miettes BM25
+/// sur un stopword, voisin vectoriel lointain) disparaît. Quand il n'y a
+/// pas de consensus, tous les scores se tiennent et rien n'est coupé.
+const MIN_SCORE_RATIO: f32 = 0.5;
 
 #[derive(Debug, Serialize)]
 pub struct SearchHit {
@@ -123,6 +129,7 @@ fn search_open(
     }
 
     let fused = rrf(&lists);
+    let cutoff = fused.first().map(|(_, top)| top * MIN_SCORE_RATIO);
 
     let mut snippets = SnippetGenerator::create(&searcher, &*query, f_body)?;
     snippets.set_max_num_chars(SNIPPET_MAX_CHARS);
@@ -130,6 +137,9 @@ fn search_open(
     let mut seen_paths = HashSet::new();
     let mut hits = Vec::new();
     for (chunk_id, score) in fused {
+        if cutoff.is_some_and(|c| score < c) {
+            break; // la liste est triée : tout ce qui suit est en dessous
+        }
         let doc = match docs_by_id.remove(&chunk_id) {
             Some(d) => d,
             None => match fetch_by_chunk_id(&searcher, f_chunk_id, chunk_id)? {
