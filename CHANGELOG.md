@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.1 — 2026-07-16
+
+- Build portability: dropped usearch's optional SIMD kernels (numkong),
+  whose C sources don't compile under cross toolchains (zig cc, old gcc)
+  and break distro packaging flags. The portable distance code keeps every
+  performance target with wide margin. v1.0.0 never shipped binaries.
+
 ## v1.0.0 — 2026-07-16
 
 First release.
