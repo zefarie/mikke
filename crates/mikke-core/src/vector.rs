@@ -28,6 +28,11 @@ pub struct VectorIndex {
 impl VectorIndex {
     /// Construit l'index à partir de (id de chunk, vecteur) et le persiste.
     pub fn build_and_save(dir: &Path, entries: &[(u64, Vec<f32>)]) -> Result<(), VectorError> {
+        // hnsw_rs n'écrase jamais un dump existant (il suffixe les noms) :
+        // on nettoie d'abord pour que open() lise toujours la version courante
+        for suffix in ["graph", "data"] {
+            let _ = std::fs::remove_file(dir.join(format!("{BASENAME}.hnsw.{suffix}")));
+        }
         let hnsw = Hnsw::<f32, DistDot>::new(
             MAX_NB_CONN,
             entries.len().max(1),
