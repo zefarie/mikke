@@ -16,7 +16,8 @@ use tantivy::schema::{
     INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions,
 };
 use tantivy::tokenizer::{
-    AsciiFoldingFilter, LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer,
+    AsciiFoldingFilter, Language, LowerCaser, RemoveLongFilter, SimpleTokenizer, StopWordFilter,
+    TextAnalyzer,
 };
 use tantivy::{Index, Term, doc};
 use thiserror::Error;
@@ -86,9 +87,13 @@ fn build_schema() -> Schema {
 }
 
 fn register_tokenizer(index: &Index) {
+    // stopwords AVANT le folding : les listes contiennent les formes
+    // accentuées (« à », « où »…) en minuscules
     let analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
         .filter(RemoveLongFilter::limit(40))
         .filter(LowerCaser)
+        .filter(StopWordFilter::new(Language::French).expect("stopwords fr"))
+        .filter(StopWordFilter::new(Language::English).expect("stopwords en"))
         .filter(AsciiFoldingFilter)
         .build();
     index.tokenizers().register(TOKENIZER_NAME, analyzer);
