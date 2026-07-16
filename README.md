@@ -73,6 +73,26 @@ $ cargo install --locked --git https://github.com/zefarie/mikke mikke-cli
 The first `mikke index` fetches the multilingual embedding model (~500 MB,
 one time). Everything after that is offline.
 
+## Configuration
+
+`mikke index <dir>` adds the folder as a root in
+`~/.config/mikke/config.toml` and refreshes everything; `mikke index` alone
+re-syncs all configured roots. Indexing a new folder never erases the
+previous ones.
+
+```toml
+roots = ["~/Documents", "~/Downloads"]
+exclude = ["~/Documents/private"]
+```
+
+To keep the index fresh without thinking about it, `mikke watch` follows
+the roots with inotify — or install it as a user service:
+
+```console
+$ cp contrib/mikke-watch.service ~/.config/systemd/user/
+$ systemctl --user enable --now mikke-watch
+```
+
 ## Status
 
 The v1 feature set is in:
