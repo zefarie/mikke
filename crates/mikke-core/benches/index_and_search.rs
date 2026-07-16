@@ -97,7 +97,14 @@ fn bench_index(c: &mut Criterion) {
     group.bench_function("bm25_200_fichiers_500_mots", |b| {
         b.iter(|| {
             let index_dir = tempfile::tempdir().unwrap();
-            mikke_core::build_index(corpus.path(), index_dir.path(), None, true).unwrap()
+            mikke_core::build_index(
+                &[corpus.path().to_path_buf()],
+                &[],
+                index_dir.path(),
+                None,
+                true,
+            )
+            .unwrap()
         });
     });
     group.finish();
@@ -109,7 +116,14 @@ fn bench_search(c: &mut Criterion) {
     let index_dir = tempfile::tempdir().unwrap();
 
     let embedder = mikke_core::Embedder::load(&model_dir()).ok();
-    mikke_core::build_index(corpus.path(), index_dir.path(), embedder.as_ref(), true).unwrap();
+    mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        embedder.as_ref(),
+        true,
+    )
+    .unwrap();
     let searcher = mikke_core::Searcher::open(index_dir.path()).unwrap();
 
     let mut group = c.benchmark_group("search");
