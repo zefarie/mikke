@@ -1,3 +1,5 @@
+mod tui;
+
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -43,7 +45,7 @@ enum Command {
         #[arg(long)]
         full: bool,
     },
-    /// Recherche interactive plein écran (étape 6 de la roadmap)
+    /// Recherche interactive plein écran, style fzf
     Tui,
 }
 
@@ -154,7 +156,12 @@ fn run() -> Result<()> {
 
     match cli.command {
         Some(Command::Index { dir, full }) => cmd_index(&dir, &index_dir, full),
-        Some(Command::Tui) => bail!("le TUI n'existe pas encore (étape 6 de la roadmap)"),
+        Some(Command::Tui) => {
+            if !index_dir.exists() {
+                bail!("aucun index — lance d'abord : mikke index ~/Documents");
+            }
+            tui::run(&index_dir, load_embedder(false))
+        }
         None if cli.query.is_empty() => {
             Cli::command().print_help()?;
             Ok(())
