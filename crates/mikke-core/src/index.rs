@@ -266,6 +266,7 @@ pub fn build_index(
         .collect();
 
     // phase 3 (séquentielle) : SQLite et tantivy
+    let mut content_changed = false;
     state.begin()?;
     for (path_str, outcome) in processed {
         match outcome {
@@ -279,6 +280,7 @@ pub fn build_index(
                 state.delete_chunks(&path_str)?;
                 state.upsert_file(&path_str, &record)?;
                 stats.files_skipped += 1;
+                content_changed = true;
             }
             Outcome::Content(record, content) => {
                 writer.delete_term(Term::from_field_text(f_path, &path_str));
@@ -310,10 +312,17 @@ pub fn build_index(
     writer.commit()?;
 
     stats.chunks = state.chunk_count()? as usize;
-    let vectors = state.all_vectors()?;
-    if !vectors.is_empty() {
-        VectorIndex::build_and_save(index_dir, &vectors)?;
-        stats.vectors = true;
+    // le graphe HNSW n'est reconstruit que si le contenu a bougé : un run
+    // « rien à faire » sur 50 000 chunks passerait sinon de ~1 s à ~15 s
+    let dirty = fresh || content_changed || stats.files_indexed > 0 || stats.files_deleted > 0;
+    if dirty {
+        let vectors = state.all_vectors()?;
+        if !vectors.is_empty() {
+            VectorIndex::build_and_save(index_dir, &vectors)?;
+            stats.vectors = true;
+        }
+    } else {
+        stats.vectors = VectorIndex::exists(index_dir);
     }
     Ok(stats)
 }
