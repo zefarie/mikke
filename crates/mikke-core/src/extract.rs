@@ -43,11 +43,33 @@ pub fn extract(path: &Path) -> Result<String, ExtractError> {
     }
 }
 
+thread_local! {
+    /// Vrai pendant un catch_unwind volontaire : le hook se tait.
+    static QUIET_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Installe (une fois) un hook qui n'étouffe les backtraces que pendant les
+/// panics attendus de pdf-extract — les vrais bugs restent visibles.
+fn install_quiet_hook() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let default = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            if !QUIET_PANIC.with(|q| q.get()) {
+                default(info);
+            }
+        }));
+    });
+}
+
 /// pdf-extract panique sur certains PDF malformés (1/50 sur le corpus du
 /// spike) : le panic est converti en `ExtractError::Corrupt`.
 fn pdf_text(path: &Path) -> Result<String, ExtractError> {
+    install_quiet_hook();
     let path = path.to_path_buf();
+    QUIET_PANIC.with(|q| q.set(true));
     let result = std::panic::catch_unwind(move || pdf_extract::extract_text(&path));
+    QUIET_PANIC.with(|q| q.set(false));
     match result {
         Ok(Ok(text)) => Ok(text),
         Ok(Err(e)) => Err(ExtractError::Corrupt(e.to_string())),
