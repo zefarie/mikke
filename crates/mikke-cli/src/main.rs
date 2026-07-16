@@ -1,8 +1,12 @@
+mod config;
 mod tui;
+mod watch;
 
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+use config::Config;
 
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -38,13 +42,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Indexe un dossier (incrémental : seuls les fichiers modifiés sont relus)
+    /// Indexe les racines configurées ; avec <DIR>, ajoute d'abord la racine
     Index {
-        dir: PathBuf,
+        dir: Option<PathBuf>,
         /// Reconstruit tout l'index de zéro
         #[arg(long)]
         full: bool,
     },
+    /// Surveille les racines et garde l'index frais (service systemd : contrib/)
+    Watch,
     /// Recherche interactive plein écran, style fzf
     Tui,
 }
@@ -155,7 +161,17 @@ fn run() -> Result<()> {
     let index_dir = data_dir().join("index");
 
     match cli.command {
-        Some(Command::Index { dir, full }) => cmd_index(&dir, &index_dir, full),
+        Some(Command::Index { dir, full }) => cmd_index(dir.as_deref(), &index_dir, full),
+        Some(Command::Watch) => {
+            let config = Config::load()?;
+            let roots = checked_roots(&config)?;
+            watch::run(
+                &roots,
+                &config.exclude_paths(),
+                &index_dir,
+                load_embedder(true),
+            )
+        }
         Some(Command::Tui) => {
             if !index_dir.exists() {
                 bail!("aucun index — lance d'abord : mikke index ~/Documents");
@@ -195,14 +211,56 @@ fn load_embedder(download_if_missing: bool) -> Option<Embedder> {
     }
 }
 
-fn cmd_index(dir: &Path, index_dir: &Path, full: bool) -> Result<()> {
-    let dir = dir
-        .canonicalize()
-        .with_context(|| format!("dossier introuvable : {}", dir.display()))?;
+/// Les racines de la config, en refusant d'indexer si l'une manque : une
+/// racine absente (disque non monté ?) ferait sortir tous ses fichiers de
+/// l'index comme « supprimés ».
+fn checked_roots(config: &Config) -> Result<Vec<PathBuf>> {
+    let roots = config.root_paths();
+    if roots.is_empty() {
+        bail!(
+            "aucune racine configurée — lance : mikke index ~/Documents\n(config : {})",
+            config::config_path().display()
+        );
+    }
+    for root in &roots {
+        if !root.is_dir() {
+            bail!(
+                "racine introuvable : {} (disque non monté ? retire-la de {})",
+                root.display(),
+                config::config_path().display()
+            );
+        }
+    }
+    Ok(roots)
+}
+
+fn cmd_index(dir: Option<&Path>, index_dir: &Path, full: bool) -> Result<()> {
+    let mut config = Config::load()?;
+    if let Some(dir) = dir {
+        let dir = dir
+            .canonicalize()
+            .with_context(|| format!("dossier introuvable : {}", dir.display()))?;
+        if config.add_root(&dir) {
+            config.save()?;
+            eprintln!(
+                "racine ajoutée : {} ({} au total — config : {})",
+                config::contract(&dir),
+                config.roots.len(),
+                config::config_path().display()
+            );
+        }
+    }
+    let roots = checked_roots(&config)?;
     let embedder = load_embedder(true);
     let start = Instant::now();
-    let stats = mikke_core::build_index(&dir, index_dir, embedder.as_ref(), full)
-        .with_context(|| format!("indexation de {} impossible", dir.display()))?;
+    let stats = mikke_core::build_index(
+        &roots,
+        &config.exclude_paths(),
+        index_dir,
+        embedder.as_ref(),
+        full,
+    )
+    .context("indexation impossible")?;
     let mut parts = vec![format!(
         "{} fichiers indexés ({} chunks{})",
         stats.files_indexed,
@@ -264,6 +322,9 @@ fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<(
         .map(|(w, _)| w as usize)
         .unwrap_or(100)
         .max(40);
+    if embedder.is_some() && mikke_core::search::low_confidence(&hits) {
+        eprintln!("(correspondance faible — rien ne colle vraiment à « {query} »)");
+    }
     for (rank, hit) in hits.iter().enumerate() {
         print_hit(&mut out, rank + 1, hit, color, width)?;
     }
