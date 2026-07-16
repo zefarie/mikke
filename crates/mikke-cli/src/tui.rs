@@ -135,9 +135,9 @@ fn draw(frame: &mut Frame, query: &str, hits: &[SearchHit], state: &mut ListStat
         .unwrap_or_else(|| {
             Line::from(Span::styled(
                 if query.trim().is_empty() {
-                    "décris le fichier que tu cherches…"
+                    "describe the file you're looking for…"
                 } else {
-                    "rien trouvé"
+                    "nothing found"
                 },
                 Style::new().add_modifier(Modifier::DIM),
             ))
@@ -151,7 +151,7 @@ fn draw(frame: &mut Frame, query: &str, hits: &[SearchHit], state: &mut ListStat
 
     let help = Line::from(Span::styled(
         format!(
-            "{} résultat(s) — ↑↓ naviguer · Entrée ouvrir · Échap quitter",
+            "{} result(s) — ↑↓ navigate · Enter open · Esc quit",
             hits.len()
         ),
         Style::new().add_modifier(Modifier::DIM),

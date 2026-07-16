@@ -23,7 +23,7 @@ pub fn run(
     embedder: Option<Embedder>,
 ) -> Result<()> {
     if roots.is_empty() {
-        bail!("aucune racine configurée — lance d'abord : mikke index ~/Documents");
+        bail!("no roots configured — run: mikke index ~/Documents");
     }
 
     reindex(roots, excludes, index_dir, embedder.as_ref(), true)?;
@@ -32,20 +32,17 @@ pub fn run(
     let mut watcher = notify::recommended_watcher(move |event| {
         let _ = tx.send(event);
     })
-    .context("création du watcher impossible")?;
+    .context("failed to create the watcher")?;
     for root in roots {
         watcher
             .watch(root, RecursiveMode::Recursive)
-            .with_context(|| format!("surveillance impossible : {}", root.display()))?;
+            .with_context(|| format!("cannot watch {}", root.display()))?;
     }
-    eprintln!(
-        "mikke veille sur {} racine(s) — Ctrl-C pour arrêter",
-        roots.len()
-    );
+    eprintln!("mikke is watching {} root(s) — Ctrl-C to stop", roots.len());
 
     loop {
         // on bloque jusqu'au premier événement intéressant…
-        let event = rx.recv().context("watcher arrêté")?;
+        let event = rx.recv().context("watcher stopped")?;
         if !interesting(&event) {
             continue;
         }
@@ -54,7 +51,7 @@ pub fn run(
             match rx.recv_timeout(DEBOUNCE) {
                 Ok(_) => continue,
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(mpsc::RecvTimeoutError::Disconnected) => bail!("watcher arrêté"),
+                Err(mpsc::RecvTimeoutError::Disconnected) => bail!("watcher stopped"),
             }
         }
         reindex(roots, excludes, index_dir, embedder.as_ref(), false)?;
@@ -82,10 +79,10 @@ fn reindex(
 ) -> Result<()> {
     let start = std::time::Instant::now();
     let stats = mikke_core::build_index(roots, excludes, index_dir, embedder, false)
-        .context("réindexation impossible")?;
+        .context("reindexing failed")?;
     if first || stats.files_indexed > 0 || stats.files_deleted > 0 {
         eprintln!(
-            "réindexé : {} fichiers, {} retirés, {} chunks au total — {:.1}s",
+            "reindexed: {} files, {} removed, {} chunks total — {:.1}s",
             stats.files_indexed,
             stats.files_deleted,
             stats.chunks,

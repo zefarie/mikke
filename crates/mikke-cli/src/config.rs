@@ -58,8 +58,8 @@ impl Config {
             return Ok(Self::default());
         }
         let raw = std::fs::read_to_string(&path)
-            .with_context(|| format!("lecture impossible : {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("config invalide : {}", path.display()))
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        toml::from_str(&raw).with_context(|| format!("invalid config: {}", path.display()))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -68,12 +68,10 @@ impl Config {
             std::fs::create_dir_all(parent)?;
         }
         let mut out = String::from(
-            "# mikke — dossiers indexés et exclusions\n\
-             # `mikke index <dossier>` ajoute une racine ici.\n\n",
+            "# mikke — indexed roots and exclusions\n# `mikke index <dir>` adds a root here.\n\n",
         );
         out.push_str(&toml::to_string_pretty(self)?);
-        std::fs::write(&path, out)
-            .with_context(|| format!("écriture impossible : {}", path.display()))?;
+        std::fs::write(&path, out).with_context(|| format!("cannot write {}", path.display()))?;
         Ok(())
     }
 
