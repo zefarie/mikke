@@ -60,8 +60,13 @@ fn main() -> Result<()> {
 
     let index_dir = tempfile::tempdir()?;
     let t = Instant::now();
-    let stats =
-        mikke_core::build_index(corpus.as_path(), index_dir.path(), Some(&embedder), false)?;
+    let stats = mikke_core::build_index(
+        std::slice::from_ref(&corpus),
+        &[],
+        index_dir.path(),
+        Some(&embedder),
+        false,
+    )?;
     eprintln!(
         "index : {} fichiers, {} chunks, vecteurs={} — {:.2}s",
         stats.files_indexed,
