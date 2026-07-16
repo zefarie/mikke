@@ -37,13 +37,13 @@ fn index_puis_recherche() {
     let corpus = corpus();
     let index_dir = tempfile::tempdir().unwrap();
 
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path()).unwrap();
+    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None).unwrap();
     assert_eq!(stats.files_indexed, 3);
     assert_eq!(stats.files_skipped, 1);
     assert_eq!(stats.files_failed, 0);
     assert!(stats.chunks >= 3);
 
-    let hits = mikke_core::search(index_dir.path(), "vaccination chat", 10).unwrap();
+    let hits = mikke_core::search(index_dir.path(), "vaccination chat", 10, None).unwrap();
     assert!(!hits.is_empty());
     assert!(hits[0].path.ends_with("facture_veto.md"));
     assert!(!hits[0].snippet.is_empty());
@@ -54,15 +54,15 @@ fn index_puis_recherche() {
 fn les_accents_ne_comptent_pas() {
     let corpus = corpus();
     let index_dir = tempfile::tempdir().unwrap();
-    mikke_core::build_index(corpus.path(), index_dir.path()).unwrap();
+    mikke_core::build_index(corpus.path(), index_dir.path(), None).unwrap();
 
     // « veterinaire » sans accent doit retrouver « vétérinaire »
-    let hits = mikke_core::search(index_dir.path(), "veterinaire", 10).unwrap();
+    let hits = mikke_core::search(index_dir.path(), "veterinaire", 10, None).unwrap();
     assert!(!hits.is_empty());
     assert!(hits[0].path.ends_with("facture_veto.md"));
 
     // et l'inverse : requête accentuée sur texte accentué
-    let hits = mikke_core::search(index_dir.path(), "théorème hypoténuse", 10).unwrap();
+    let hits = mikke_core::search(index_dir.path(), "théorème hypoténuse", 10, None).unwrap();
     assert!(hits[0].path.ends_with("cours_pythagore.md"));
 }
 
@@ -70,9 +70,9 @@ fn les_accents_ne_comptent_pas() {
 fn requete_sans_resultat() {
     let corpus = corpus();
     let index_dir = tempfile::tempdir().unwrap();
-    mikke_core::build_index(corpus.path(), index_dir.path()).unwrap();
+    mikke_core::build_index(corpus.path(), index_dir.path(), None).unwrap();
 
-    let hits = mikke_core::search(index_dir.path(), "zygomatique quaternion", 10).unwrap();
+    let hits = mikke_core::search(index_dir.path(), "zygomatique quaternion", 10, None).unwrap();
     assert!(hits.is_empty());
 }
 
@@ -80,9 +80,9 @@ fn requete_sans_resultat() {
 fn un_fichier_par_resultat() {
     let corpus = corpus();
     let index_dir = tempfile::tempdir().unwrap();
-    mikke_core::build_index(corpus.path(), index_dir.path()).unwrap();
+    mikke_core::build_index(corpus.path(), index_dir.path(), None).unwrap();
 
     // « pommes » apparaît plusieurs fois dans recette.txt : un seul hit attendu
-    let hits = mikke_core::search(index_dir.path(), "pommes", 10).unwrap();
+    let hits = mikke_core::search(index_dir.path(), "pommes", 10, None).unwrap();
     assert_eq!(hits.len(), 1);
 }
