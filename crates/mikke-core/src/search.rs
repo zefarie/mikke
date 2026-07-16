@@ -1,28 +1,33 @@
-//! Recherche BM25 avec extraits surlignés.
+//! Recherche hybride : BM25 et voisins vectoriels, fusionnés par RRF.
 //!
 //! La recherche se fait au niveau des chunks ; on garde le meilleur chunk de
-//! chaque fichier pour ne jamais montrer deux fois le même document.
+//! chaque fichier pour ne jamais montrer deux fois le même document. Sans
+//! modèle d'embeddings (ou sans index vectoriel), on retombe en BM25 seul.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::Path;
 
 use serde::Serialize;
-use tantivy::TantivyDocument;
 use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::Value;
+use tantivy::query::{QueryParser, TermQuery};
+use tantivy::schema::{IndexRecordOption, Value};
 use tantivy::snippet::SnippetGenerator;
+use tantivy::{TantivyDocument, Term};
 
+use crate::embed::Embedder;
+use crate::fuse::rrf;
 use crate::index::open_index;
+use crate::vector::VectorIndex;
 
-/// Combien de chunks on ramène avant dédoublonnage par fichier.
+/// Combien de chunks chaque côté ramène avant fusion.
 const CHUNK_POOL: usize = 50;
 const SNIPPET_MAX_CHARS: usize = 240;
 
 #[derive(Debug, Serialize)]
 pub struct SearchHit {
     pub path: String,
+    /// Score RRF (comparable entre requêtes, pas entre index).
     pub score: f32,
     /// Extrait du chunk le mieux classé.
     pub snippet: String,
@@ -30,36 +35,75 @@ pub struct SearchHit {
     pub highlights: Vec<Range<usize>>,
 }
 
-pub fn search(index_dir: &Path, query_str: &str, limit: usize) -> tantivy::Result<Vec<SearchHit>> {
+pub fn search(
+    index_dir: &Path,
+    query_str: &str,
+    limit: usize,
+    embedder: Option<&Embedder>,
+) -> tantivy::Result<Vec<SearchHit>> {
     let index = open_index(index_dir)?;
     let schema = index.schema();
     let f_path = schema.get_field("path").expect("champ path");
+    let f_chunk_id = schema.get_field("chunk_id").expect("champ chunk_id");
     let f_body = schema.get_field("body").expect("champ body");
 
     let searcher = index.reader()?.searcher();
     let parser = QueryParser::for_index(&index, vec![f_body]);
     // lenient : une requête utilisateur n'est jamais une erreur de syntaxe
     let (query, _) = parser.parse_query_lenient(query_str);
-    let top_chunks = searcher.search(&query, &TopDocs::with_limit(CHUNK_POOL).order_by_score())?;
+
+    // côté BM25 : chunks classés + documents déjà récupérés
+    let mut docs_by_id: HashMap<u64, TantivyDocument> = HashMap::new();
+    let mut bm25_ranked: Vec<u64> = Vec::new();
+    for (_score, addr) in
+        searcher.search(&query, &TopDocs::with_limit(CHUNK_POOL).order_by_score())?
+    {
+        let doc: TantivyDocument = searcher.doc(addr)?;
+        if let Some(id) = doc.get_first(f_chunk_id).and_then(|v| v.as_u64()) {
+            bm25_ranked.push(id);
+            docs_by_id.insert(id, doc);
+        }
+    }
+
+    // côté vecteurs : voisins du même embedding que l'index
+    let mut lists = vec![bm25_ranked];
+    if let Some(embedder) = embedder {
+        match VectorIndex::open(index_dir) {
+            Ok(Some(vectors)) => match embedder.embed(query_str) {
+                Ok(qvec) => lists.push(vectors.search(&qvec, CHUNK_POOL)),
+                Err(e) => eprintln!("warn: embedding de la requête impossible ({e})"),
+            },
+            Ok(None) => {}
+            Err(e) => eprintln!("warn: {e}"),
+        }
+    }
+
+    let fused = rrf(&lists);
 
     let mut snippets = SnippetGenerator::create(&searcher, &*query, f_body)?;
     snippets.set_max_num_chars(SNIPPET_MAX_CHARS);
 
-    let mut seen = HashSet::new();
+    let mut seen_paths = HashSet::new();
     let mut hits = Vec::new();
-    for (score, addr) in top_chunks {
-        let doc: TantivyDocument = searcher.doc(addr)?;
+    for (chunk_id, score) in fused {
+        let doc = match docs_by_id.remove(&chunk_id) {
+            Some(d) => d,
+            None => match fetch_by_chunk_id(&searcher, f_chunk_id, chunk_id)? {
+                Some(d) => d,
+                None => continue,
+            },
+        };
         let path = doc
             .get_first(f_path)
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        if !seen.insert(path.clone()) {
+        if !seen_paths.insert(path.clone()) {
             continue;
         }
         let snippet = snippets.snippet_from_doc(&doc);
         let (fragment, highlights) = if snippet.fragment().is_empty() {
-            // requête sans position exploitable : début du chunk en secours
+            // hit purement vectoriel : pas de terme à surligner, début du chunk
             let body = doc
                 .get_first(f_body)
                 .and_then(|v| v.as_str())
@@ -82,6 +126,21 @@ pub fn search(index_dir: &Path, query_str: &str, limit: usize) -> tantivy::Resul
         }
     }
     Ok(hits)
+}
+
+/// Récupère un chunk par son id (hits venus du seul index vectoriel).
+fn fetch_by_chunk_id(
+    searcher: &tantivy::Searcher,
+    f_chunk_id: tantivy::schema::Field,
+    chunk_id: u64,
+) -> tantivy::Result<Option<TantivyDocument>> {
+    let term = Term::from_field_u64(f_chunk_id, chunk_id);
+    let query = TermQuery::new(term, IndexRecordOption::Basic);
+    let top = searcher.search(&query, &TopDocs::with_limit(1).order_by_score())?;
+    match top.first() {
+        Some((_, addr)) => Ok(Some(searcher.doc(*addr)?)),
+        None => Ok(None),
+    }
 }
 
 fn truncate_chars(s: &str, max: usize) -> String {
