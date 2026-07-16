@@ -113,15 +113,7 @@ fn draw(frame: &mut Frame, query: &str, hits: &[SearchHit], state: &mut ListStat
 
     let items: Vec<ListItem> = hits
         .iter()
-        .map(|hit| {
-            ListItem::new(Line::from(vec![
-                Span::raw(shorten_home(&hit.path)),
-                Span::styled(
-                    format!("  {:.3}", hit.score),
-                    Style::new().add_modifier(Modifier::DIM),
-                ),
-            ]))
-        })
+        .map(|hit| ListItem::new(Line::from(Span::raw(shorten_home(&hit.path)))))
         .collect();
     let list = List::new(items)
         .highlight_style(Style::new().fg(ACCENT).add_modifier(Modifier::BOLD))
