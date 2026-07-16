@@ -1,0 +1,16 @@
+# Unité systemd user : l'index mikke reste frais tout seul.
+#   cp contrib/mikke-watch.service ~/.config/systemd/user/
+#   systemctl --user enable --now mikke-watch
+
+[Unit]
+Description=mikke watch, index des documents toujours frais
+
+[Service]
+ExecStart=%h/.cargo/bin/mikke watch
+Restart=on-failure
+RestartSec=10
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target
