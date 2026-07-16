@@ -44,14 +44,11 @@ const SIM_FLOOR_RATIO: f32 = 0.6;
 /// re-ranker qui tranchera, pas un seuil.
 const ABS_SIM_FLOOR: f32 = 0.12;
 
-/// Le meilleur résultat n'a été vu que par UN signal (BM25 ou vecteurs,
-/// pas les deux) : en mode hybride, c'est le parfum d'une requête à
-/// laquelle le corpus ne répond pas vraiment.
-pub fn low_confidence(hits: &[SearchHit]) -> bool {
-    // score RRF d'un rang 1 vu par une seule liste : 1/(k+1)
-    hits.first()
-        .is_some_and(|top| top.score < 1.9 / (60.0 + 1.0))
-}
+/// Sous cette similarité, quand BM25 n'a RIEN trouvé du tout, les voisins
+/// vectoriels affichés ne sont probablement que du remplissage : on prévient
+/// l'utilisateur. Attention à ne PAS déclencher sur les vraies trouvailles
+/// sémantiques (mots absents du document) : elles montent à 0,45+.
+const WEAK_SIM: f32 = 0.35;
 
 #[derive(Debug, Serialize)]
 pub struct SearchHit {
@@ -98,6 +95,18 @@ impl Searcher {
         limit: usize,
         embedder: Option<&Embedder>,
     ) -> tantivy::Result<Vec<SearchHit>> {
+        Ok(search_open(self, query_str, limit, embedder)?.0)
+    }
+
+    /// Comme [`Searcher::search`], plus un booléen « correspondance
+    /// douteuse » : BM25 n'a rien trouvé ET le meilleur voisin vectoriel
+    /// est loin — ce qui s'affiche n'est que du moins-pire.
+    pub fn search_with_confidence(
+        &self,
+        query_str: &str,
+        limit: usize,
+        embedder: Option<&Embedder>,
+    ) -> tantivy::Result<(Vec<SearchHit>, bool)> {
         search_open(self, query_str, limit, embedder)
     }
 }
@@ -112,12 +121,22 @@ pub fn search(
     Searcher::open(index_dir)?.search(query_str, limit, embedder)
 }
 
+/// Recherche « one-shot » avec le drapeau de confiance.
+pub fn search_with_confidence(
+    index_dir: &Path,
+    query_str: &str,
+    limit: usize,
+    embedder: Option<&Embedder>,
+) -> tantivy::Result<(Vec<SearchHit>, bool)> {
+    Searcher::open(index_dir)?.search_with_confidence(query_str, limit, embedder)
+}
+
 fn search_open(
     open: &Searcher,
     query_str: &str,
     limit: usize,
     embedder: Option<&Embedder>,
-) -> tantivy::Result<Vec<SearchHit>> {
+) -> tantivy::Result<(Vec<SearchHit>, bool)> {
     let index = &open.index;
     let schema = index.schema();
     let f_path = schema.get_field("path").expect("champ path");
@@ -156,16 +175,17 @@ fn search_open(
         collect_ranked(&searcher, &*query, f_chunk_id, &mut docs_by_id)?,
     ];
 
+    let bm25_empty = lists.iter().all(|l| l.is_empty());
+
     // côté vecteurs : voisins du même embedding que l'index, sans les
     // voisins de remplissage (plancher relatif à la meilleure similarité)
+    let mut best_sim: f32 = 0.0;
     if let (Some(embedder), Some(vectors)) = (embedder, open.vectors.as_ref()) {
         match embedder.embed(query_str) {
             Ok(qvec) => {
                 let neighbours = vectors.search(&qvec, CHUNK_POOL);
-                let floor = neighbours
-                    .first()
-                    .map(|(_, best)| (best * SIM_FLOOR_RATIO).max(ABS_SIM_FLOOR))
-                    .unwrap_or(0.0);
+                best_sim = neighbours.first().map(|(_, s)| *s).unwrap_or(0.0);
+                let floor = (best_sim * SIM_FLOOR_RATIO).max(ABS_SIM_FLOOR);
                 lists.push(
                     neighbours
                         .into_iter()
@@ -229,7 +249,8 @@ fn search_open(
             break;
         }
     }
-    Ok(hits)
+    let weak = !hits.is_empty() && bm25_empty && best_sim < WEAK_SIM;
+    Ok((hits, weak))
 }
 
 /// Chunks classés pour une requête tantivy, documents mémorisés au passage.
