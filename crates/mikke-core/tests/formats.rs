@@ -55,7 +55,14 @@ fn indexation_multi_formats() {
     .unwrap();
 
     let index_dir = tempfile::tempdir().unwrap();
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 4, "pdf + docx + html + md");
     assert_eq!(stats.files_failed, 1, "le pdf corrompu, sans crash");
 
