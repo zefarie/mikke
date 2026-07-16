@@ -1,0 +1,21 @@
+name: aur-check
+
+on:
+  workflow_dispatch:
+
+jobs:
+  makepkg:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+      - name: build the PKGBUILD as a normal user
+        run: |
+          pacman -Syu --noconfirm rust
+          useradd -m builder
+          cp contrib/aur/PKGBUILD /home/builder/
+          chown builder:builder /home/builder/PKGBUILD
+          su builder -c "cd ~ && makepkg -s --noconfirm"
+          ls /home/builder/*.pkg.tar.zst
