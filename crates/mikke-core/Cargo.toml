@@ -6,10 +6,20 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64 = "0.22.1"
+fst = "0.4.7"
+hnsw_rs = "0.3.4"
+memmap2 = "0.9.11"
+safetensors = "0.8.0"
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+spm_precompiled = "0.1.4"
 tantivy = "0.26.1"
 thiserror = "2.0.18"
 walkdir = "2.5.0"
 
 [dev-dependencies]
+anyhow = "1.0.103"
 tempfile = "3.27.0"
+tokenizers = { version = "0.23.1", default-features = false, features = ["fancy-regex"] }
+toml = "1.1.3"
