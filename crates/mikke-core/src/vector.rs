@@ -1,7 +1,9 @@
 //! Index vectoriel HNSW (hnsw_rs), persisté à côté de l'index BM25.
 //!
-//! Les vecteurs étant L2-normalisés, la distance dot (1 − produit scalaire)
-//! ordonne comme la similarité cosinus.
+//! Distance : L2 sur vecteurs L2-normalisés, soit ‖a−b‖² = 2 − 2·cos(a,b) —
+//! strictement monotone en cosinus, donc classement identique. Surtout PAS
+//! `DistDot` : elle assert `dot >= 0.` et deux embeddings peuvent très bien
+//! avoir un cosinus négatif (panic découvert sur un corpus de 10 000 docs).
 
 use std::path::Path;
 
@@ -22,7 +24,7 @@ const EF_SEARCH: usize = 96;
 pub struct VectorError(String);
 
 pub struct VectorIndex {
-    hnsw: Hnsw<'static, f32, DistDot>,
+    hnsw: Hnsw<'static, f32, DistL2>,
 }
 
 impl VectorIndex {
@@ -33,12 +35,12 @@ impl VectorIndex {
         for suffix in ["graph", "data"] {
             let _ = std::fs::remove_file(dir.join(format!("{BASENAME}.hnsw.{suffix}")));
         }
-        let hnsw = Hnsw::<f32, DistDot>::new(
+        let hnsw = Hnsw::<f32, DistL2>::new(
             MAX_NB_CONN,
             entries.len().max(1),
             NB_LAYER,
             EF_CONSTRUCTION,
-            DistDot {},
+            DistL2 {},
         );
         let data: Vec<(&Vec<f32>, usize)> =
             entries.iter().map(|(id, v)| (v, *id as usize)).collect();
@@ -60,7 +62,7 @@ impl VectorIndex {
         let dir = dir.to_path_buf();
         let loaded = std::panic::catch_unwind(move || {
             let io: &'static mut HnswIo = Box::leak(Box::new(HnswIo::new(&dir, BASENAME)));
-            io.load_hnsw::<f32, DistDot>()
+            io.load_hnsw::<f32, DistL2>()
         });
         match loaded {
             Ok(Ok(hnsw)) => Ok(Some(Self { hnsw })),
