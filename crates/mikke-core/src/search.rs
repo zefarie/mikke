@@ -29,6 +29,14 @@ const SNIPPET_MAX_CHARS: usize = 240;
 /// sur un stopword, voisin vectoriel lointain) disparaît. Quand il n'y a
 /// pas de consensus, tous les scores se tiennent et rien n'est coupé.
 const MIN_SCORE_RATIO: f32 = 0.5;
+/// Planchers relatifs À L'INTÉRIEUR de chaque liste, avant fusion : un
+/// candidat n'entre que s'il tient la comparaison avec le meilleur de SA
+/// liste. Un document qui ne matche qu'une miette (« 9 » dans une regex)
+/// fait quelques pourcents du meilleur score BM25 ; un voisin vectoriel de
+/// remplissage est loin de la meilleure similarité. RRF ne voyant que des
+/// rangs, c'est ici que les intrus doivent être arrêtés.
+const BM25_FLOOR_RATIO: f32 = 0.3;
+const SIM_FLOOR_RATIO: f32 = 0.6;
 
 #[derive(Debug, Serialize)]
 pub struct SearchHit {
@@ -133,10 +141,24 @@ fn search_open(
         collect_ranked(&searcher, &*query, f_chunk_id, &mut docs_by_id)?,
     ];
 
-    // côté vecteurs : voisins du même embedding que l'index
+    // côté vecteurs : voisins du même embedding que l'index, sans les
+    // voisins de remplissage (plancher relatif à la meilleure similarité)
     if let (Some(embedder), Some(vectors)) = (embedder, open.vectors.as_ref()) {
         match embedder.embed(query_str) {
-            Ok(qvec) => lists.push(vectors.search(&qvec, CHUNK_POOL)),
+            Ok(qvec) => {
+                let neighbours = vectors.search(&qvec, CHUNK_POOL);
+                let floor = neighbours
+                    .first()
+                    .map(|(_, best)| best * SIM_FLOOR_RATIO)
+                    .unwrap_or(0.0);
+                lists.push(
+                    neighbours
+                        .into_iter()
+                        .take_while(|(_, sim)| *sim >= floor)
+                        .map(|(id, _)| id)
+                        .collect(),
+                );
+            }
             Err(e) => eprintln!("warn: embedding de la requête impossible ({e})"),
         }
     }
@@ -196,16 +218,23 @@ fn search_open(
 }
 
 /// Chunks classés pour une requête tantivy, documents mémorisés au passage.
+/// Les scores BM25 trop loin du meilleur de la liste restent dehors.
 fn collect_ranked(
     searcher: &tantivy::Searcher,
     query: &dyn tantivy::query::Query,
     f_chunk_id: tantivy::schema::Field,
     docs_by_id: &mut HashMap<u64, TantivyDocument>,
 ) -> tantivy::Result<Vec<u64>> {
+    let top = searcher.search(query, &TopDocs::with_limit(CHUNK_POOL).order_by_score())?;
+    let floor = top
+        .first()
+        .map(|(best, _)| best * BM25_FLOOR_RATIO)
+        .unwrap_or(0.0);
     let mut ranked = Vec::new();
-    for (_score, addr) in
-        searcher.search(query, &TopDocs::with_limit(CHUNK_POOL).order_by_score())?
-    {
+    for (score, addr) in top {
+        if score < floor {
+            break; // trié par score : tout ce qui suit est en dessous
+        }
         let doc: TantivyDocument = searcher.doc(addr)?;
         if let Some(id) = doc.get_first(f_chunk_id).and_then(|v| v.as_u64()) {
             ranked.push(id);
