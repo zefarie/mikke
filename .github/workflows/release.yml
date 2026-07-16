@@ -3,6 +3,11 @@ name: release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release"
+        required: true
 
 permissions:
   contents: write
@@ -17,17 +22,24 @@ jobs:
           - aarch64-unknown-linux-musl
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+      - uses: mlugg/setup-zig@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cross
-      - run: cross build --release --target ${{ matrix.target }} -p mikke-cli
+          tool: cargo-zigbuild
+      - run: cargo zigbuild --release --target ${{ matrix.target }} -p mikke-cli
       - name: package
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          name="mikke-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          name="mikke-${RELEASE_TAG}-${{ matrix.target }}"
           mkdir "$name"
           cp "target/${{ matrix.target }}/release/mikke" "$name/"
           cp README.md LICENSE-MIT LICENSE-APACHE "$name/"
@@ -36,6 +48,7 @@ jobs:
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             *.tar.gz
             *.tar.gz.sha256
