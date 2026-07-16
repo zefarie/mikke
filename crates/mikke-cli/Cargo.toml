@@ -14,7 +14,7 @@ anyhow = "1.0.103"
 clap = { version = "4.6.2", features = ["derive"] }
 clap_complete = "4.6.7"
 crossterm = "0.29.0"
-mikke-core = { version = "0.1.0", path = "../mikke-core" }
+mikke-core = { version = "1.0.0", path = "../mikke-core" }
 notify = "8.2.0"
 ratatui = "0.30.2"
 serde = { version = "1.0.228", features = ["derive"] }
