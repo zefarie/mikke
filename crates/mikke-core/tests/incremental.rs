@@ -36,12 +36,26 @@ fn cycle_incremental_complet() {
     );
 
     // premier run : tout est indexé
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 3);
     assert_eq!(stats.files_unchanged, 0);
 
     // deuxième run sans modification : rien n'est relu
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 0);
     assert_eq!(stats.files_unchanged, 3);
     assert_eq!(stats.chunks, 3);
@@ -53,7 +67,14 @@ fn cycle_incremental_complet() {
         "velo.md",
         "Réparation du vélo : régler les freins à disque.",
     );
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 1);
     assert_eq!(stats.files_unchanged, 2);
     assert!(top_path(index_dir.path(), "freins disque").is_some_and(|p| p.ends_with("velo.md")));
@@ -69,19 +90,40 @@ fn cycle_incremental_complet() {
         "jardin.md",
         "Semer les tomates en avril, arroser le soir.",
     );
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 0);
     assert_eq!(stats.files_unchanged, 3);
 
     // suppression : le fichier sort de l'index
     fs::remove_file(corpus.path().join("chat.md")).unwrap();
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_deleted, 1);
     assert_eq!(stats.chunks, 2);
     assert!(top_path(index_dir.path(), "Perceval radiateur").is_none());
 
     // --full : reconstruction complète, mêmes résultats
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, true).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        true,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 2);
     assert!(top_path(index_dir.path(), "tomates avril").is_some_and(|p| p.ends_with("jardin.md")));
 }
