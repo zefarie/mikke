@@ -37,6 +37,21 @@ const MIN_SCORE_RATIO: f32 = 0.5;
 /// rangs, c'est ici que les intrus doivent être arrêtés.
 const BM25_FLOOR_RATIO: f32 = 0.3;
 const SIM_FLOOR_RATIO: f32 = 0.6;
+/// Plancher absolu de similarité cosinus : en dessous, un voisin vectoriel
+/// n'a aucun rapport avec la requête. Calibré sur mesures : les paires
+/// requête→bon document descendent à ~0,18, le bruit anti-corrélé traîne
+/// sous ~0,10. Les distributions se recouvrent au-dessus — c'est le
+/// re-ranker qui tranchera, pas un seuil.
+const ABS_SIM_FLOOR: f32 = 0.12;
+
+/// Le meilleur résultat n'a été vu que par UN signal (BM25 ou vecteurs,
+/// pas les deux) : en mode hybride, c'est le parfum d'une requête à
+/// laquelle le corpus ne répond pas vraiment.
+pub fn low_confidence(hits: &[SearchHit]) -> bool {
+    // score RRF d'un rang 1 vu par une seule liste : 1/(k+1)
+    hits.first()
+        .is_some_and(|top| top.score < 1.9 / (60.0 + 1.0))
+}
 
 #[derive(Debug, Serialize)]
 pub struct SearchHit {
@@ -149,7 +164,7 @@ fn search_open(
                 let neighbours = vectors.search(&qvec, CHUNK_POOL);
                 let floor = neighbours
                     .first()
-                    .map(|(_, best)| best * SIM_FLOOR_RATIO)
+                    .map(|(_, best)| (best * SIM_FLOOR_RATIO).max(ABS_SIM_FLOOR))
                     .unwrap_or(0.0);
                 lists.push(
                     neighbours
