@@ -1,0 +1,40 @@
+# Maintainer: zefarie <111502700+zefarie@users.noreply.github.com>
+pkgname=mikke
+pkgver=1.0.1
+pkgrel=1
+pkgdesc="Find any file you can describe — local semantic search for personal documents"
+arch=('x86_64' 'aarch64')
+url="https://github.com/zefarie/mikke"
+license=('MIT OR Apache-2.0')
+options=('!lto')
+depends=('gcc-libs')
+makedepends=('cargo')
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('2999162d26de00425c7a8f4b669b41d790fd72f3efb98c284e95a8b27dcc0d54')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --frozen --release -p mikke-cli
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/mikke "$pkgdir/usr/bin/mikke"
+  install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+  install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+  install -Dm644 contrib/mikke-watch.service "$pkgdir/usr/lib/systemd/user/mikke-watch.service"
+  target/release/mikke completions bash | install -Dm644 /dev/stdin "$pkgdir/usr/share/bash-completion/completions/mikke"
+  target/release/mikke completions zsh  | install -Dm644 /dev/stdin "$pkgdir/usr/share/zsh/site-functions/_mikke"
+  target/release/mikke completions fish | install -Dm644 /dev/stdin "$pkgdir/usr/share/fish/vendor_completions.d/mikke.fish"
+}
