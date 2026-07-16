@@ -66,7 +66,11 @@ Design rules, in order:
 
 ## Install
 
-Not packaged yet — from source it's one line (Rust 1.85+):
+Static binaries for Linux (x86_64, aarch64) are on the
+[releases page](https://github.com/zefarie/mikke/releases) — download,
+untar, put `mikke` in your PATH. Checksums included.
+
+From source it's one line (Rust 1.85+):
 
 ```console
 $ cargo install --locked --git https://github.com/zefarie/mikke mikke-cli
