@@ -41,6 +41,49 @@ const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 /// Dossiers jamais indexés (en plus des dossiers cachés).
 const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "__pycache__", "venv"];
 
+/// mikke cherche des documents, pas du code : un dossier qui contient un de
+/// ces marqueurs de build est un projet logiciel, on saute tout le sous-arbre.
+/// Volontairement sans `.git` : les gens versionnent leurs notes.
+const CODE_PROJECT_MARKERS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "go.mod",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "settings.gradle",
+    "settings.gradle.kts",
+    "gradlew",
+    "CMakeLists.txt",
+    "pyproject.toml",
+    "composer.json",
+    "mix.exs",
+];
+
+fn is_code_project(dir: &Path) -> bool {
+    if CODE_PROJECT_MARKERS.iter().any(|m| dir.join(m).exists()) {
+        return true;
+    }
+    // archive java/mod décompressée
+    if dir.join("META-INF").exists() || dir.join("pack.mcmeta").exists() {
+        return true;
+    }
+    // sources ou artefacts en vrac (dossiers décompilés…)
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(ext) = path.extension()
+                && (ext.eq_ignore_ascii_case("jar")
+                    || ext.eq_ignore_ascii_case("class")
+                    || ext.eq_ignore_ascii_case("java"))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[derive(Debug, Error)]
 pub enum IndexError {
     #[error(transparent)]
@@ -65,6 +108,8 @@ pub struct IndexStats {
     pub files_failed: usize,
     /// Fichiers disparus du disque, retirés de l'index.
     pub files_deleted: usize,
+    /// Sous-arbres sautés car reconnus comme projets de code.
+    pub code_dirs_skipped: usize,
     /// Total de chunks vivants dans l'index.
     pub chunks: usize,
     /// Faux si l'index ne contient aucun vecteur.
@@ -77,12 +122,16 @@ fn build_schema() -> Schema {
         .set_tokenizer(TOKENIZER_NAME)
         .set_index_option(IndexRecordOption::WithFreqsAndPositions);
     let body_options = TextOptions::default()
-        .set_indexing_options(body_indexing)
+        .set_indexing_options(body_indexing.clone())
         .set_stored();
+    // le nom du fichier participe au score : « chapitre 9 » doit trouver
+    // cours_chapitre_9.pdf même si le corps est pauvre
+    let filename_options = TextOptions::default().set_indexing_options(body_indexing);
     builder.add_text_field("path", STRING | STORED);
     builder.add_u64_field("chunk_id", INDEXED | STORED);
     builder.add_u64_field("chunk_ix", STORED);
     builder.add_text_field("body", body_options);
+    builder.add_text_field("filename", filename_options);
     builder.build()
 }
 
@@ -115,12 +164,20 @@ struct FileEntry {
 /// Parcourt `corpus` et liste les fichiers supportés avec leurs métadonnées.
 fn collect_files(corpus: &Path, stats: &mut IndexStats) -> Vec<FileEntry> {
     let mut files = Vec::new();
+    let code_dirs = std::cell::Cell::new(0usize);
     let walker = WalkDir::new(corpus).into_iter().filter_entry(|e| {
         if e.depth() == 0 || !e.file_type().is_dir() {
             return true;
         }
         let name = e.file_name().to_string_lossy();
-        !name.starts_with('.') && !SKIPPED_DIRS.contains(&name.as_ref())
+        if name.starts_with('.') || SKIPPED_DIRS.contains(&name.as_ref()) {
+            return false;
+        }
+        if is_code_project(e.path()) {
+            code_dirs.set(code_dirs.get() + 1);
+            return false;
+        }
+        true
     });
     for entry in walker {
         let entry = match entry {
@@ -158,6 +215,7 @@ fn collect_files(corpus: &Path, stats: &mut IndexStats) -> Vec<FileEntry> {
             size: meta.len() as i64,
         });
     }
+    stats.code_dirs_skipped = code_dirs.get();
     files
 }
 
@@ -172,7 +230,16 @@ pub fn build_index(
     embedder: Option<&Embedder>,
     full: bool,
 ) -> Result<IndexStats, IndexError> {
-    let fresh = full || !index_dir.join(DB_FILE).exists() || !index_dir.join("meta.json").exists();
+    let mut fresh =
+        full || !index_dir.join(DB_FILE).exists() || !index_dir.join("meta.json").exists();
+    if !fresh {
+        // schéma d'une version précédente de mikke → reconstruction complète
+        let existing = Index::open_in_dir(index_dir)?;
+        if existing.schema().get_field("filename").is_err() {
+            eprintln!("note : ancien format d'index, reconstruction complète");
+            fresh = true;
+        }
+    }
     if fresh && index_dir.exists() {
         std::fs::remove_dir_all(index_dir)?;
     }
@@ -190,6 +257,7 @@ pub fn build_index(
     let f_chunk_id = schema.get_field("chunk_id").expect("champ chunk_id");
     let f_chunk_ix = schema.get_field("chunk_ix").expect("champ chunk_ix");
     let f_body = schema.get_field("body").expect("champ body");
+    let f_filename = schema.get_field("filename").expect("champ filename");
 
     let mut writer = index.writer(WRITER_HEAP_BYTES)?;
     let mut stats = IndexStats::default();
@@ -291,6 +359,10 @@ pub fn build_index(
                 writer.delete_term(Term::from_field_text(f_path, &path_str));
                 state.delete_chunks(&path_str)?;
                 state.upsert_file(&path_str, &record)?;
+                let stem = Path::new(&path_str)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
                 for (ix, (piece, vector)) in content.into_iter().enumerate() {
                     let chunk_id = state.insert_chunk(&path_str, ix as u64, &vector)?;
                     writer.add_document(doc!(
@@ -298,9 +370,11 @@ pub fn build_index(
                         f_chunk_id => chunk_id,
                         f_chunk_ix => ix as u64,
                         f_body => piece,
+                        f_filename => stem.clone(),
                     ))?;
                 }
                 stats.files_indexed += 1;
+                content_changed = true;
             }
         }
     }
