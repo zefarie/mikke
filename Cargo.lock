@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "mikke-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "mikke-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2078,15 +2078,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "numkong"
-version = "7.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b58d4bb97df102ebdde66a352a20c0bc65c7c407ee9bef12ebe317edc2458a55"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -3072,7 +3063,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spike-pdf"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "pdf-extract",
  "pdfium-render",
@@ -3800,7 +3791,6 @@ checksum = "1cd7f672d20412962c457b11c858c6c5aecb949808a5345a95e1d671112bcf72"
 dependencies = [
  "cxx",
  "cxx-build",
- "numkong",
 ]
 
 [[package]]
