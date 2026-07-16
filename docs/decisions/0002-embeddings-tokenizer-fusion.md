@@ -52,7 +52,23 @@ Pure Rust (usearch = C++ à linker). Pièges rencontrés, encapsulés dans
 - le rechargement emprunte le `HnswIo` (`'a: 'b`) → `Box::leak`, une fois
   par ouverture d'index ;
 - le rechargement panique sur un dump corrompu → `catch_unwind`, on dégrade
-  en BM25 seul au lieu de crasher.
+  en BM25 seul au lieu de crasher ;
+- `DistDot` assert `dot >= 0.` : deux embeddings peuvent avoir un cosinus
+  négatif (panic apparu à 10 000 documents, jamais sur les petits corpus).
+  On utilise `DistL2` sur vecteurs normalisés — ‖a−b‖² = 2 − 2·cos, même
+  classement, aucune assertion.
+
+### Révision 2026-07-16 : hnsw_rs remplacé par usearch
+
+hnsw_rs désérialise le graphe nœud par nœud au rechargement : ~450 ms sur
+49 628 chunks, à payer à chaque invocation de la CLI — p95 mesuré à 457 ms
+pour un budget de 100 ms. usearch (l'autre option prévue par la spec)
+recharge en `view()` mmap, sans parsing : p95 21 ms. Bonus : insertions
+parallèles plus rapides (indexation 10 000 fichiers : 20,5 s → 10,1 s),
+métrique cosinus qui accepte les scores négatifs, un seul fichier de dump,
+clés u64 natives, pas de hack de lifetime. Coût : une dépendance C++
+compilée statiquement dans le binaire (17 Mo au final, budget 40).
+Les pièges hnsw_rs ci-dessus restent documentés pour mémoire.
 
 ## Fusion : Reciprocal Rank Fusion (k = 60)
 
