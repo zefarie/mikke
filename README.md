@@ -18,7 +18,9 @@
   <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-6B655E?style=flat-square" alt="license: MIT or Apache-2.0">
 </p>
 
-<!-- demo.gif -->
+<p align="center">
+  <img src="assets/demo.gif" alt="mikke indexing a folder, then finding files from natural-language descriptions" width="820">
+</p>
 
 ---
 
