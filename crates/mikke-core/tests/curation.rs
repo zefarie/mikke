@@ -40,6 +40,45 @@ fn les_projets_de_code_sont_sautes() {
 }
 
 #[test]
+fn une_miette_ne_suffit_pas_a_sortir() {
+    // le scénario réel : des cours, et un rapport technique qui contient
+    // un « 9 » perdu dans une regex — il ne doit PAS sortir
+    let corpus = tempfile::tempdir().unwrap();
+    fs::write(
+        corpus.path().join("cours_chapitre_9.md"),
+        "Chapitre 9 : changement d'état et transfert thermique. Physique de première.",
+    )
+    .unwrap();
+    fs::write(
+        corpus.path().join("cours_chapitre_10.md"),
+        "Chapitre 10 : des acides et des bases. Physique et chimie des solutions.",
+    )
+    .unwrap();
+    fs::write(
+        corpus.path().join("rapport_deobf.md"),
+        "Détection des proxies : getThreadName().matches(\"[a-zA-Z0-9]\") ajoute le \
+         thread à la liste des suspects. Analyse du bytecode et des mixins.",
+    )
+    .unwrap();
+
+    let index_dir = tempfile::tempdir().unwrap();
+    mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+
+    let hits =
+        mikke_core::search(index_dir.path(), "cours de physique chapitre 9", 10, None).unwrap();
+    assert!(
+        hits.first()
+            .is_some_and(|h| h.path.ends_with("cours_chapitre_9.md")),
+        "le chapitre 9 doit être premier"
+    );
+    assert!(
+        !hits.iter().any(|h| h.path.ends_with("rapport_deobf.md")),
+        "un match sur le seul « 9 » ne doit pas sortir : {:?}",
+        hits.iter().map(|h| &h.path).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn le_nom_du_fichier_pese_dans_le_score() {
     let corpus = tempfile::tempdir().unwrap();
     fs::write(
