@@ -29,9 +29,9 @@ const MAX_INPUT_CHARS: usize = 8192;
 
 #[derive(Debug, Error)]
 pub enum TokError {
-    #[error("cache tokenizer illisible : {0}")]
+    #[error("unreadable tokenizer cache: {0}")]
     Io(#[from] std::io::Error),
-    #[error("tokenizer invalide : {0}")]
+    #[error("invalid tokenizer: {0}")]
     Format(String),
 }
 
@@ -87,12 +87,12 @@ impl Tok {
         let parsed: TokenizerJson = serde_json::from_str(&raw).map_err(format_err)?;
         if parsed.model.kind != "Unigram" {
             return Err(TokError::Format(format!(
-                "modèle {} non géré (Unigram attendu)",
+                "unsupported model {} (expected Unigram)",
                 parsed.model.kind
             )));
         }
         let charsmap_b64 = find_charsmap(&parsed.normalizer)
-            .ok_or_else(|| TokError::Format("precompiled_charsmap introuvable".into()))?;
+            .ok_or_else(|| TokError::Format("precompiled_charsmap not found".into()))?;
         let charsmap = base64::engine::general_purpose::STANDARD
             .decode(charsmap_b64)
             .map_err(format_err)?;
@@ -132,15 +132,14 @@ impl Tok {
 
     pub fn load(cache: &Path) -> Result<Self, TokError> {
         let bytes = std::fs::read(cache)?;
-        let corrupt =
-            || TokError::Format("cache corrompu (supprime-le, il sera reconstruit)".into());
+        let corrupt = || TokError::Format("corrupt cache (delete it, it will be rebuilt)".into());
         if bytes.len() < 16 || &bytes[..8] != MAGIC {
             return Err(corrupt());
         }
         fn read_len(bytes: &[u8], pos: &mut usize) -> Result<usize, TokError> {
             let raw = bytes
                 .get(*pos..*pos + 8)
-                .ok_or_else(|| TokError::Format("cache tronqué".into()))?;
+                .ok_or_else(|| TokError::Format("truncated cache".into()))?;
             *pos += 8;
             Ok(u64::from_le_bytes(raw.try_into().expect("8 octets")) as usize)
         }

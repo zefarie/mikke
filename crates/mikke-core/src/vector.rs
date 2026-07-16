@@ -17,7 +17,7 @@ const EXPANSION_ADD: usize = 200;
 const EXPANSION_SEARCH: usize = 96;
 
 #[derive(Debug, Error)]
-#[error("index vectoriel : {0}")]
+#[error("vector index: {0}")]
 pub struct VectorError(String);
 
 fn err(e: impl std::fmt::Display) -> VectorError {
@@ -57,7 +57,7 @@ impl VectorIndex {
         let path = dir.join(FILE_NAME);
         let tmp = dir.join(format!("{FILE_NAME}.part"));
         index
-            .save(tmp.to_str().ok_or_else(|| err("chemin non UTF-8"))?)
+            .save(tmp.to_str().ok_or_else(|| err("non-UTF-8 path"))?)
             .map_err(err)?;
         std::fs::rename(&tmp, &path).map_err(err)?;
         Ok(())
@@ -78,7 +78,7 @@ impl VectorIndex {
         // les options (hors dimensions) sont relues depuis le fichier
         let index = Index::new(&Self::options(0)).map_err(err)?;
         index
-            .view(path.to_str().ok_or_else(|| err("chemin non UTF-8"))?)
+            .view(path.to_str().ok_or_else(|| err("non-UTF-8 path"))?)
             .map_err(err)?;
         Ok(Some(Self { index }))
     }

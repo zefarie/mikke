@@ -174,7 +174,7 @@ fn search_open(
                         .collect(),
                 );
             }
-            Err(e) => eprintln!("warn: embedding de la requête impossible ({e})"),
+            Err(e) => eprintln!("warn: could not embed the query ({e})"),
         }
     }
 

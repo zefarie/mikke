@@ -9,9 +9,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ExtractError {
-    #[error("lecture impossible : {0}")]
+    #[error("read failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("fichier corrompu : {0}")]
+    #[error("corrupt file: {0}")]
     Corrupt(String),
 }
 
@@ -73,7 +73,7 @@ fn pdf_text(path: &Path) -> Result<String, ExtractError> {
     match result {
         Ok(Ok(text)) => Ok(text),
         Ok(Err(e)) => Err(ExtractError::Corrupt(e.to_string())),
-        Err(_) => Err(ExtractError::Corrupt("panic dans pdf-extract".into())),
+        Err(_) => Err(ExtractError::Corrupt("panic inside pdf-extract".into())),
     }
 }
 

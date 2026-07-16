@@ -88,7 +88,7 @@ fn is_code_project(dir: &Path) -> bool {
 pub enum IndexError {
     #[error(transparent)]
     Tantivy(#[from] tantivy::TantivyError),
-    #[error("état d'index : {0}")]
+    #[error("index state: {0}")]
     Db(#[from] rusqlite::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -194,7 +194,7 @@ fn collect_files(
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!("warn: entrée illisible, ignorée ({e})");
+                    eprintln!("warn: unreadable entry, skipped ({e})");
                     stats.files_failed += 1;
                     continue;
                 }
@@ -255,7 +255,7 @@ pub fn build_index(
         // schéma d'une version précédente de mikke → reconstruction complète
         let existing = Index::open_in_dir(index_dir)?;
         if existing.schema().get_field("filename").is_err() {
-            eprintln!("note : ancien format d'index, reconstruction complète");
+            eprintln!("note: old index format, full rebuild");
             fresh = true;
         }
     }
@@ -316,7 +316,7 @@ pub fn build_index(
             let bytes = match std::fs::read(&entry.path) {
                 Ok(b) => b,
                 Err(e) => {
-                    eprintln!("warn: {} illisible, ignoré ({e})", entry.path.display());
+                    eprintln!("warn: {} unreadable, skipped ({e})", entry.path.display());
                     return (path_str, Outcome::Failed);
                 }
             };
@@ -335,7 +335,7 @@ pub fn build_index(
             let text = match extract::extract(&entry.path) {
                 Ok(t) => t,
                 Err(e) => {
-                    eprintln!("warn: {} illisible, ignoré ({e})", entry.path.display());
+                    eprintln!("warn: {} unreadable, skipped ({e})", entry.path.display());
                     return (path_str, Outcome::Failed);
                 }
             };

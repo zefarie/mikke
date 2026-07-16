@@ -22,11 +22,11 @@ const MAX_TOKENS: usize = 512;
 
 #[derive(Debug, Error)]
 pub enum EmbedError {
-    #[error("modèle illisible : {0}")]
+    #[error("unreadable model: {0}")]
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Tokenizer(#[from] TokError),
-    #[error("modèle invalide : {0}")]
+    #[error("invalid model: {0}")]
     Format(String),
 }
 
@@ -61,14 +61,14 @@ impl Embedder {
             .map_err(|e| EmbedError::Format(e.to_string()))?;
         if tensor.dtype() != safetensors::Dtype::F32 {
             return Err(EmbedError::Format(format!(
-                "dtype {:?} non géré (F32 attendu)",
+                "unsupported dtype {:?} (expected F32)",
                 tensor.dtype()
             )));
         }
         let [rows, dim]: [usize; 2] = tensor
             .shape()
             .try_into()
-            .map_err(|_| EmbedError::Format("tenseur embeddings non 2D".into()))?;
+            .map_err(|_| EmbedError::Format("embeddings tensor is not 2-D".into()))?;
         // offset des données du tenseur dans le fichier mmappé (zéro copie)
         let data_start = tensor.data().as_ptr() as usize - map.as_ptr() as usize;
 
