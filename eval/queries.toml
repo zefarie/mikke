@@ -1,0 +1,84 @@
+# 20 requêtes de référence pour mesurer la qualité de recherche (hit@10).
+# `q` est ce qu'un humain taperait ; `expect` est le fichier attendu dans
+# eval/corpus/. Les requêtes marquées « sémantique » ne partagent presque
+# aucun mot avec le document cible : BM25 seul doit échouer, l'hybride non.
+
+[[query]]
+q = "facture vétérinaire janvier"
+expect = "facture-veterinaire.md"
+
+[[query]] # sémantique
+q = "médecin des animaux"
+expect = "facture-veterinaire.md"
+
+[[query]]
+q = "vaccin du chat"
+expect = "facture-veterinaire.md"
+
+[[query]] # sémantique
+q = "preuve que mon appartement est assuré"
+expect = "assurance-habitation.txt"
+
+[[query]] # sémantique
+q = "papiers pour quitter mon logement préavis"
+expect = "bail-location.md"
+
+[[query]]
+q = "résilier ma box"
+expect = "resiliation-internet.txt"
+
+[[query]]
+q = "combien je paie de loyer"
+expect = "bail-location.md"
+
+[[query]] # sémantique
+q = "mon salaire au restaurant"
+expect = "contrat-travail.md"
+
+[[query]]
+q = "posologie antibiotique"
+expect = "ordonnance-medicale.txt"
+
+[[query]]
+q = "revenu fiscal de référence"
+expect = "impots-avis.md"
+
+[[query]] # sémantique
+q = "dessert aux pommes"
+expect = "recette-tarte.md"
+
+[[query]] # sémantique
+q = "notes de physique sur la chaleur et le désordre"
+expect = "cours-thermodynamique.md"
+
+[[query]]
+q = "garantie de mon pc portable"
+expect = "garantie-ordinateur.txt"
+
+[[query]]
+q = "rappel de vaccin DTP"
+expect = "carnet-vaccination.md"
+
+[[query]]
+q = "bulletin scolaire deuxième trimestre"
+expect = "releve-notes-lycee.md"
+
+[[query]]
+q = "billet de train pour Paris"
+expect = "billet-train.md"
+
+[[query]]
+q = "how much is my rent"
+expect = "lease-agreement.md"
+
+[[query]]
+q = "starting salary offer"
+expect = "job-offer.txt"
+
+[[query]] # sémantique
+q = "am I covered if I crash my car"
+expect = "insurance-policy.md"
+
+[[query]] # sémantique + inter-langue : requête FR, document EN
+q = "facture du plombier fuite cuisine"
+expect = "plumber-invoice.txt"
