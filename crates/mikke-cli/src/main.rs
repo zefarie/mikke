@@ -334,8 +334,9 @@ fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<(
         bail!("no index yet — run: mikke index ~/Documents");
     }
     let embedder = load_embedder(false);
-    let hits =
-        mikke_core::search(index_dir, query, top, embedder.as_ref()).context("search failed")?;
+    let (hits, weak) =
+        mikke_core::search::search_with_confidence(index_dir, query, top, embedder.as_ref())
+            .context("search failed")?;
 
     let mut out = std::io::stdout().lock();
     if json {
@@ -356,7 +357,7 @@ fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<(
         .map(|(w, _)| w as usize)
         .unwrap_or(100)
         .max(40);
-    if embedder.is_some() && mikke_core::search::low_confidence(&hits) {
+    if weak {
         eprintln!("(weak match — nothing really fits \"{query}\")");
     }
     for (rank, hit) in hits.iter().enumerate() {
