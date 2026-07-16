@@ -9,6 +9,7 @@ pub mod extract;
 pub mod fuse;
 pub mod index;
 pub mod search;
+pub mod state;
 pub mod tok;
 pub mod vector;
 
