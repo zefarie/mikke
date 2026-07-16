@@ -28,7 +28,14 @@ fn les_projets_de_code_sont_sautes() {
     .unwrap();
 
     let index_dir = tempfile::tempdir().unwrap();
-    let stats = mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    let stats = mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(stats.files_indexed, 1, "seul notes.md doit être indexé");
     assert_eq!(stats.code_dirs_skipped, 2);
 
@@ -62,7 +69,14 @@ fn une_miette_ne_suffit_pas_a_sortir() {
     .unwrap();
 
     let index_dir = tempfile::tempdir().unwrap();
-    mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
 
     let hits =
         mikke_core::search(index_dir.path(), "cours de physique chapitre 9", 10, None).unwrap();
@@ -93,7 +107,14 @@ fn le_nom_du_fichier_pese_dans_le_score() {
     .unwrap();
 
     let index_dir = tempfile::tempdir().unwrap();
-    mikke_core::build_index(corpus.path(), index_dir.path(), None, false).unwrap();
+    mikke_core::build_index(
+        &[corpus.path().to_path_buf()],
+        &[],
+        index_dir.path(),
+        None,
+        false,
+    )
+    .unwrap();
 
     // « facture » n'apparaît que dans le NOM du premier fichier
     let hits = mikke_core::search(index_dir.path(), "facture électricité", 10, None).unwrap();
