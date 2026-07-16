@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "mikke-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "mikke-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3072,7 +3072,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "spike-pdf"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "pdf-extract",
  "pdfium-render",
