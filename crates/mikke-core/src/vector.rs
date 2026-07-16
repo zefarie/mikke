@@ -1,84 +1,93 @@
-//! Index vectoriel HNSW (hnsw_rs), persisté à côté de l'index BM25.
+//! Index vectoriel HNSW (usearch), persisté à côté de l'index BM25.
 //!
-//! Distance : L2 sur vecteurs L2-normalisés, soit ‖a−b‖² = 2 − 2·cos(a,b) —
-//! strictement monotone en cosinus, donc classement identique. Surtout PAS
-//! `DistDot` : elle assert `dot >= 0.` et deux embeddings peuvent très bien
-//! avoir un cosinus négatif (panic découvert sur un corpus de 10 000 docs).
+//! usearch plutôt que hnsw_rs : son format se recharge en `view()` (mmap,
+//! zéro parsing) là où hnsw_rs désérialise le graphe nœud par nœud — ~450 ms
+//! par invocation de la CLI sur 50 000 chunks, intenable pour un budget de
+//! 100 ms. Métrique cosinus native (les scores négatifs ne posent aucun
+//! problème, contrairement au `DistDot` de hnsw_rs qui assert `dot >= 0`).
 
 use std::path::Path;
 
-use hnsw_rs::api::AnnT;
-use hnsw_rs::hnswio::HnswIo;
-use hnsw_rs::prelude::*;
 use thiserror::Error;
+use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
 
-const BASENAME: &str = "vectors";
-const MAX_NB_CONN: usize = 16;
-/// hnsw_rs ne sait dumper qu'avec ce nombre exact de couches (NB_MAX_LAYER).
-const NB_LAYER: usize = 16;
-const EF_CONSTRUCTION: usize = 200;
-const EF_SEARCH: usize = 96;
+const FILE_NAME: &str = "vectors.usearch";
+const CONNECTIVITY: usize = 16;
+const EXPANSION_ADD: usize = 200;
+const EXPANSION_SEARCH: usize = 96;
 
 #[derive(Debug, Error)]
 #[error("index vectoriel : {0}")]
 pub struct VectorError(String);
 
+fn err(e: impl std::fmt::Display) -> VectorError {
+    VectorError(e.to_string())
+}
+
 pub struct VectorIndex {
-    hnsw: Hnsw<'static, f32, DistL2>,
+    index: Index,
 }
 
 impl VectorIndex {
+    fn options(dim: usize) -> IndexOptions {
+        IndexOptions {
+            dimensions: dim,
+            metric: MetricKind::Cos,
+            quantization: ScalarKind::F32,
+            connectivity: CONNECTIVITY,
+            expansion_add: EXPANSION_ADD,
+            expansion_search: EXPANSION_SEARCH,
+            ..Default::default()
+        }
+    }
+
     /// Construit l'index à partir de (id de chunk, vecteur) et le persiste.
     pub fn build_and_save(dir: &Path, entries: &[(u64, Vec<f32>)]) -> Result<(), VectorError> {
-        // hnsw_rs n'écrase jamais un dump existant (il suffixe les noms) :
-        // on nettoie d'abord pour que open() lise toujours la version courante
-        for suffix in ["graph", "data"] {
-            let _ = std::fs::remove_file(dir.join(format!("{BASENAME}.hnsw.{suffix}")));
-        }
-        let hnsw = Hnsw::<f32, DistL2>::new(
-            MAX_NB_CONN,
-            entries.len().max(1),
-            NB_LAYER,
-            EF_CONSTRUCTION,
-            DistL2 {},
-        );
-        let data: Vec<(&Vec<f32>, usize)> =
-            entries.iter().map(|(id, v)| (v, *id as usize)).collect();
-        hnsw.parallel_insert(&data);
-        hnsw.file_dump(dir, BASENAME)
-            .map_err(|e| VectorError(e.to_string()))?;
+        let Some(dim) = entries.first().map(|(_, v)| v.len()) else {
+            return Ok(());
+        };
+        let index = Index::new(&Self::options(dim)).map_err(err)?;
+        index.reserve(entries.len()).map_err(err)?;
+        // usearch encaisse les insertions concurrentes
+        use rayon::prelude::*;
+        entries
+            .par_iter()
+            .try_for_each(|(id, vector)| index.add(*id, vector))
+            .map_err(err)?;
+        let path = dir.join(FILE_NAME);
+        let tmp = dir.join(format!("{FILE_NAME}.part"));
+        index
+            .save(tmp.to_str().ok_or_else(|| err("chemin non UTF-8"))?)
+            .map_err(err)?;
+        std::fs::rename(&tmp, &path).map_err(err)?;
         Ok(())
     }
 
+    /// Un index vectoriel est-il présent dans ce dossier ?
+    pub fn exists(dir: &Path) -> bool {
+        dir.join(FILE_NAME).exists()
+    }
+
     /// Ouvre l'index vectoriel s'il existe (None : index BM25 seul).
+    /// `view` mmappe le fichier : l'ouverture est instantanée.
     pub fn open(dir: &Path) -> Result<Option<Self>, VectorError> {
-        if !dir.join(format!("{BASENAME}.hnsw.graph")).exists() {
+        let path = dir.join(FILE_NAME);
+        if !path.exists() {
             return Ok(None);
         }
-        // Le Hnsw rechargé emprunte le HnswIo ('a: 'b) : on le leake, une
-        // seule fois par ouverture d'index, pour obtenir un 'static propre.
-        // hnswio panique sur un dump corrompu : catch_unwind pour dégrader
-        // en BM25 seul plutôt que crasher.
-        let dir = dir.to_path_buf();
-        let loaded = std::panic::catch_unwind(move || {
-            let io: &'static mut HnswIo = Box::leak(Box::new(HnswIo::new(&dir, BASENAME)));
-            io.load_hnsw::<f32, DistL2>()
-        });
-        match loaded {
-            Ok(Ok(hnsw)) => Ok(Some(Self { hnsw })),
-            Ok(Err(e)) => Err(VectorError(e.to_string())),
-            Err(_) => Err(VectorError(
-                "dump corrompu (réindexe avec `mikke index`)".into(),
-            )),
-        }
+        // les options (hors dimensions) sont relues depuis le fichier
+        let index = Index::new(&Self::options(0)).map_err(err)?;
+        index
+            .view(path.to_str().ok_or_else(|| err("chemin non UTF-8"))?)
+            .map_err(err)?;
+        Ok(Some(Self { index }))
     }
 
     /// Ids de chunks les plus proches, du meilleur au moins bon.
     pub fn search(&self, query: &[f32], k: usize) -> Vec<u64> {
-        self.hnsw
-            .search(query, k, EF_SEARCH)
-            .into_iter()
-            .map(|n| n.d_id as u64)
-            .collect()
+        self.index
+            .search(query, k)
+            .map(|m| m.keys)
+            .unwrap_or_default()
     }
 }
