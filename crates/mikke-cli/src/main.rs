@@ -36,8 +36,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Indexe un dossier (réindexation complète pour l'instant)
-    Index { dir: PathBuf },
+    /// Indexe un dossier (incrémental : seuls les fichiers modifiés sont relus)
+    Index {
+        dir: PathBuf,
+        /// Reconstruit tout l'index de zéro
+        #[arg(long)]
+        full: bool,
+    },
     /// Recherche interactive plein écran (étape 6 de la roadmap)
     Tui,
 }
@@ -148,7 +153,7 @@ fn run() -> Result<()> {
     let index_dir = data_dir().join("index");
 
     match cli.command {
-        Some(Command::Index { dir }) => cmd_index(&dir, &index_dir),
+        Some(Command::Index { dir, full }) => cmd_index(&dir, &index_dir, full),
         Some(Command::Tui) => bail!("le TUI n'existe pas encore (étape 6 de la roadmap)"),
         None if cli.query.is_empty() => {
             Cli::command().print_help()?;
@@ -183,7 +188,7 @@ fn load_embedder(download_if_missing: bool) -> Option<Embedder> {
     }
 }
 
-fn cmd_index(dir: &Path, index_dir: &Path) -> Result<()> {
+fn cmd_index(dir: &Path, index_dir: &Path, full: bool) -> Result<()> {
     let dir = dir
         .canonicalize()
         .with_context(|| format!("dossier introuvable : {}", dir.display()))?;
@@ -192,20 +197,32 @@ fn cmd_index(dir: &Path, index_dir: &Path) -> Result<()> {
     // pdf-extract panique sur les PDF tordus : le panic est déjà converti en
     // erreur comptée « illisible », inutile d'imprimer une backtrace par fichier
     std::panic::set_hook(Box::new(|_| {}));
-    let stats = mikke_core::build_index(&dir, index_dir, embedder.as_ref())
+    let stats = mikke_core::build_index(&dir, index_dir, embedder.as_ref(), full)
         .with_context(|| format!("indexation de {} impossible", dir.display()))?;
     let _ = std::panic::take_hook();
-    println!(
-        "{} fichiers indexés ({} chunks{}), {} ignorés, {} illisibles — {:.1}s",
+    let mut parts = vec![format!(
+        "{} fichiers indexés ({} chunks{})",
         stats.files_indexed,
         stats.chunks,
         if stats.vectors {
             ", BM25 + vecteurs"
         } else {
             ", BM25 seul"
-        },
-        stats.files_skipped,
-        stats.files_failed,
+        }
+    )];
+    if stats.files_unchanged > 0 {
+        parts.push(format!("{} inchangés", stats.files_unchanged));
+    }
+    if stats.files_deleted > 0 {
+        parts.push(format!("{} retirés", stats.files_deleted));
+    }
+    parts.push(format!("{} ignorés", stats.files_skipped));
+    if stats.files_failed > 0 {
+        parts.push(format!("{} illisibles", stats.files_failed));
+    }
+    println!(
+        "{} — {:.1}s",
+        parts.join(", "),
         start.elapsed().as_secs_f32()
     );
     Ok(())
