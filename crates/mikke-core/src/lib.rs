@@ -15,4 +15,4 @@ pub mod vector;
 
 pub use embed::Embedder;
 pub use index::{IndexStats, build_index};
-pub use search::{SearchHit, search};
+pub use search::{SearchHit, Searcher, search};
