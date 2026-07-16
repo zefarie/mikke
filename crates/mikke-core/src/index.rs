@@ -191,11 +191,13 @@ pub fn build_index(
     let files = collect_files(corpus, &mut stats);
 
     let mut seen: HashSet<String> = HashSet::with_capacity(files.len());
-    state.begin()?;
+
+    // phase 1 (séquentielle, peu coûteuse) : écarter les fichiers dont
+    // mtime + taille n'ont pas bougé
+    let mut candidates: Vec<(FileEntry, String, Option<FileRecord>)> = Vec::new();
     for entry in files {
         let path_str = entry.path.to_string_lossy().into_owned();
         seen.insert(path_str.clone());
-
         let previous = state.file(&path_str)?;
         if let Some(prev) = &previous
             && prev.mtime_ns == entry.mtime_ns
@@ -204,61 +206,96 @@ pub fn build_index(
             stats.files_unchanged += 1;
             continue;
         }
-        let bytes = match std::fs::read(&entry.path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("warn: {} illisible, ignoré ({e})", entry.path.display());
-                stats.files_failed += 1;
-                continue;
-            }
-        };
-        let record = FileRecord {
-            mtime_ns: entry.mtime_ns,
-            size: entry.size,
-            hash: blake3::hash(&bytes).into(),
-        };
-        if let Some(prev) = &previous
-            && prev.hash == record.hash
-        {
-            // mtime a bougé, pas le contenu (copie, touch…)
-            state.upsert_file(&path_str, &record)?;
-            stats.files_unchanged += 1;
-            continue;
-        }
-        drop(bytes);
+        candidates.push((entry, path_str, previous));
+    }
 
-        // contenu neuf : purge l'ancienne version puis réémet
-        writer.delete_term(Term::from_field_text(f_path, &path_str));
-        state.delete_chunks(&path_str)?;
-        state.upsert_file(&path_str, &record)?;
-
-        let text = match extract::extract(&entry.path) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("warn: {} illisible, ignoré ({e})", entry.path.display());
-                stats.files_failed += 1;
-                continue;
-            }
-        };
-        let chunks = chunk::chunk(&text, CHUNK_WORDS, CHUNK_OVERLAP);
-        if chunks.is_empty() {
-            stats.files_skipped += 1;
-            continue;
-        }
-        for (ix, piece) in chunks.into_iter().enumerate() {
-            let vector = match embedder {
-                Some(e) => e.embed(&piece).unwrap_or_default(),
-                None => Vec::new(),
+    // phase 2 (parallèle) : lecture, hash, extraction, chunking, embeddings —
+    // tout ce qui coûte des minutes part sur tous les cœurs
+    enum Outcome {
+        Unchanged(FileRecord),
+        Failed,
+        Empty(FileRecord),
+        Content(FileRecord, Vec<(String, Vec<f32>)>),
+    }
+    use rayon::prelude::*;
+    let processed: Vec<(String, Outcome)> = candidates
+        .into_par_iter()
+        .map(|(entry, path_str, previous)| {
+            let bytes = match std::fs::read(&entry.path) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("warn: {} illisible, ignoré ({e})", entry.path.display());
+                    return (path_str, Outcome::Failed);
+                }
             };
-            let chunk_id = state.insert_chunk(&path_str, ix as u64, &vector)?;
-            writer.add_document(doc!(
-                f_path => path_str.clone(),
-                f_chunk_id => chunk_id,
-                f_chunk_ix => ix as u64,
-                f_body => piece,
-            ))?;
+            let record = FileRecord {
+                mtime_ns: entry.mtime_ns,
+                size: entry.size,
+                hash: blake3::hash(&bytes).into(),
+            };
+            if let Some(prev) = &previous
+                && prev.hash == record.hash
+            {
+                // mtime a bougé, pas le contenu (copie, touch…)
+                return (path_str, Outcome::Unchanged(record));
+            }
+            drop(bytes);
+            let text = match extract::extract(&entry.path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("warn: {} illisible, ignoré ({e})", entry.path.display());
+                    return (path_str, Outcome::Failed);
+                }
+            };
+            let pieces = chunk::chunk(&text, CHUNK_WORDS, CHUNK_OVERLAP);
+            if pieces.is_empty() {
+                return (path_str, Outcome::Empty(record));
+            }
+            let content = pieces
+                .into_iter()
+                .map(|piece| {
+                    let vector = match embedder {
+                        Some(e) => e.embed(&piece).unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    (piece, vector)
+                })
+                .collect();
+            (path_str, Outcome::Content(record, content))
+        })
+        .collect();
+
+    // phase 3 (séquentielle) : SQLite et tantivy
+    state.begin()?;
+    for (path_str, outcome) in processed {
+        match outcome {
+            Outcome::Failed => stats.files_failed += 1,
+            Outcome::Unchanged(record) => {
+                state.upsert_file(&path_str, &record)?;
+                stats.files_unchanged += 1;
+            }
+            Outcome::Empty(record) => {
+                writer.delete_term(Term::from_field_text(f_path, &path_str));
+                state.delete_chunks(&path_str)?;
+                state.upsert_file(&path_str, &record)?;
+                stats.files_skipped += 1;
+            }
+            Outcome::Content(record, content) => {
+                writer.delete_term(Term::from_field_text(f_path, &path_str));
+                state.delete_chunks(&path_str)?;
+                state.upsert_file(&path_str, &record)?;
+                for (ix, (piece, vector)) in content.into_iter().enumerate() {
+                    let chunk_id = state.insert_chunk(&path_str, ix as u64, &vector)?;
+                    writer.add_document(doc!(
+                        f_path => path_str.clone(),
+                        f_chunk_id => chunk_id,
+                        f_chunk_ix => ix as u64,
+                        f_body => piece,
+                    ))?;
+                }
+                stats.files_indexed += 1;
+            }
         }
-        stats.files_indexed += 1;
     }
 
     // fichiers disparus du disque
