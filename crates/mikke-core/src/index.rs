@@ -1,18 +1,22 @@
-//! Construction de l'index plein-texte (tantivy, BM25).
+//! Construction de l'index : plein-texte (tantivy, BM25) + vectoriel (HNSW).
 //!
-//! v1 étape 2 : réindexation complète à chaque `mikke index`. L'incrémental
-//! (mtime + blake3, étape 5) se branchera ici — le chemin est déjà stocké
-//! par chunk, il suffira de supprimer/réémettre les documents d'un fichier.
+//! v1 étape 3 : réindexation complète à chaque `mikke index`. L'incrémental
+//! (mtime + blake3, étape 5) se branchera ici — chaque chunk porte déjà son
+//! chemin et un id stable dans l'index.
 
 use std::path::Path;
 
-use tantivy::schema::{IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions};
+use tantivy::schema::{
+    INDEXED, IndexRecordOption, STORED, STRING, Schema, TextFieldIndexing, TextOptions,
+};
 use tantivy::tokenizer::{
     AsciiFoldingFilter, LowerCaser, RemoveLongFilter, SimpleTokenizer, TextAnalyzer,
 };
 use tantivy::{Index, doc};
 use walkdir::WalkDir;
 
+use crate::embed::Embedder;
+use crate::vector::VectorIndex;
 use crate::{chunk, extract};
 
 /// Tokenizer maison : minuscules + suppression des accents, pour que
@@ -36,6 +40,14 @@ pub struct IndexStats {
     /// Fichiers illisibles (signalés en warning, jamais bloquants).
     pub files_failed: usize,
     pub chunks: usize,
+    /// Faux si l'index a été construit sans modèle d'embeddings.
+    pub vectors: bool,
+}
+
+struct ChunkRecord {
+    path: String,
+    chunk_ix: u64,
+    text: String,
 }
 
 fn build_schema() -> Schema {
@@ -47,6 +59,7 @@ fn build_schema() -> Schema {
         .set_indexing_options(body_indexing)
         .set_stored();
     builder.add_text_field("path", STRING | STORED);
+    builder.add_u64_field("chunk_id", INDEXED | STORED);
     builder.add_u64_field("chunk_ix", STORED);
     builder.add_text_field("body", body_options);
     builder.build()
@@ -68,23 +81,9 @@ pub fn open_index(index_dir: &Path) -> tantivy::Result<Index> {
     Ok(index)
 }
 
-/// (Re)construit l'index complet de `corpus` dans `index_dir`.
-pub fn build_index(corpus: &Path, index_dir: &Path) -> tantivy::Result<IndexStats> {
-    if index_dir.exists() {
-        std::fs::remove_dir_all(index_dir)?;
-    }
-    std::fs::create_dir_all(index_dir)?;
-    let index = Index::create_in_dir(index_dir, build_schema())?;
-    register_tokenizer(&index);
-
-    let schema = index.schema();
-    let f_path = schema.get_field("path").expect("champ path");
-    let f_chunk_ix = schema.get_field("chunk_ix").expect("champ chunk_ix");
-    let f_body = schema.get_field("body").expect("champ body");
-
-    let mut writer = index.writer(WRITER_HEAP_BYTES)?;
-    let mut stats = IndexStats::default();
-
+/// Parcourt `corpus` et collecte les chunks de tous les fichiers lisibles.
+fn collect_chunks(corpus: &Path, stats: &mut IndexStats) -> Vec<ChunkRecord> {
+    let mut records = Vec::new();
     let walker = WalkDir::new(corpus).into_iter().filter_entry(|e| {
         if e.depth() == 0 || !e.file_type().is_dir() {
             return true;
@@ -133,16 +132,68 @@ pub fn build_index(corpus: &Path, index_dir: &Path) -> tantivy::Result<IndexStat
         }
         let path_str = path.to_string_lossy().into_owned();
         for (ix, piece) in chunks.into_iter().enumerate() {
-            writer.add_document(doc!(
-                f_path => path_str.clone(),
-                f_chunk_ix => ix as u64,
-                f_body => piece,
-            ))?;
-            stats.chunks += 1;
+            records.push(ChunkRecord {
+                path: path_str.clone(),
+                chunk_ix: ix as u64,
+                text: piece,
+            });
         }
         stats.files_indexed += 1;
     }
+    records
+}
 
+/// (Re)construit l'index complet de `corpus` dans `index_dir`.
+///
+/// Avec un `Embedder`, l'index vectoriel HNSW est construit à côté de l'index
+/// BM25 ; sans (modèle absent), l'index reste utilisable en BM25 seul.
+pub fn build_index(
+    corpus: &Path,
+    index_dir: &Path,
+    embedder: Option<&Embedder>,
+) -> tantivy::Result<IndexStats> {
+    if index_dir.exists() {
+        std::fs::remove_dir_all(index_dir)?;
+    }
+    std::fs::create_dir_all(index_dir)?;
+    let index = Index::create_in_dir(index_dir, build_schema())?;
+    register_tokenizer(&index);
+
+    let schema = index.schema();
+    let f_path = schema.get_field("path").expect("champ path");
+    let f_chunk_id = schema.get_field("chunk_id").expect("champ chunk_id");
+    let f_chunk_ix = schema.get_field("chunk_ix").expect("champ chunk_ix");
+    let f_body = schema.get_field("body").expect("champ body");
+
+    let mut stats = IndexStats::default();
+    let records = collect_chunks(corpus, &mut stats);
+    stats.chunks = records.len();
+
+    let mut writer = index.writer(WRITER_HEAP_BYTES)?;
+    for (chunk_id, rec) in records.iter().enumerate() {
+        writer.add_document(doc!(
+            f_path => rec.path.clone(),
+            f_chunk_id => chunk_id as u64,
+            f_chunk_ix => rec.chunk_ix,
+            f_body => rec.text.clone(),
+        ))?;
+    }
     writer.commit()?;
+
+    if let Some(embedder) = embedder {
+        let mut entries: Vec<(u64, Vec<f32>)> = Vec::with_capacity(records.len());
+        for (chunk_id, rec) in records.iter().enumerate() {
+            match embedder.embed(&rec.text) {
+                Ok(v) => entries.push((chunk_id as u64, v)),
+                Err(e) => eprintln!("warn: embedding impossible pour {} ({e})", rec.path),
+            }
+        }
+        if let Err(e) = VectorIndex::build_and_save(index_dir, &entries) {
+            eprintln!("warn: {e} — l'index restera en BM25 seul");
+        } else {
+            stats.vectors = true;
+        }
+    }
+
     Ok(stats)
 }
