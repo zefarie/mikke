@@ -254,54 +254,112 @@ fn cmd_search(query: &str, index_dir: &Path, top: usize, json: bool) -> Result<(
     }
 
     let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let width = crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(100)
+        .max(40);
     for (rank, hit) in hits.iter().enumerate() {
-        print_hit(&mut out, rank + 1, hit, color)?;
+        print_hit(&mut out, rank + 1, hit, color, width)?;
     }
     Ok(())
 }
 
+/// Deux lignes par résultat : nom de fichier en gras + dossier estompé,
+/// puis l'extrait sur une seule ligne, tronqué à la largeur du terminal.
 fn print_hit(
     out: &mut impl Write,
     rank: usize,
     hit: &SearchHit,
     color: bool,
+    width: usize,
 ) -> std::io::Result<()> {
-    let path = shorten_home(&hit.path);
+    let path = Path::new(&hit.path);
+    let file = path
+        .file_name()
+        .map(|f| f.to_string_lossy().into_owned())
+        .unwrap_or_else(|| hit.path.clone());
+    let dir = path
+        .parent()
+        .map(|p| shorten_home(&p.to_string_lossy()))
+        .unwrap_or_default();
+    if rank > 1 {
+        writeln!(out)?;
+    }
     if color {
         writeln!(
             out,
-            "\x1b[1m{rank:2}. {path}\x1b[0m  \x1b[2m{:.3}\x1b[0m",
-            hit.score
+            "\x1b[2m{rank:2}\x1b[0m \x1b[1m{file}\x1b[0m  \x1b[2m{dir}\x1b[0m"
         )?;
     } else {
-        writeln!(out, "{rank:2}. {path}  {:.3}", hit.score)?;
+        writeln!(out, "{rank:2} {file}  {dir}")?;
     }
-    let snippet = highlight(&hit.snippet, &hit.highlights, color);
-    let one_line = snippet.split_whitespace().collect::<Vec<_>>().join(" ");
-    writeln!(out, "    {one_line}")
+    write!(out, "   ")?;
+    render_snippet(
+        out,
+        &hit.snippet,
+        &hit.highlights,
+        color,
+        width.saturating_sub(5),
+    )?;
+    writeln!(out)
 }
 
-/// Insère les codes ANSI autour des plages surlignées (offsets en octets).
-fn highlight(text: &str, ranges: &[std::ops::Range<usize>], color: bool) -> String {
-    if !color || ranges.is_empty() {
-        return text.to_string();
-    }
+/// Rend l'extrait : blancs fusionnés, termes de la requête en vermillon, le
+/// reste estompé, coupé proprement à `budget` caractères.
+fn render_snippet(
+    out: &mut impl Write,
+    text: &str,
+    ranges: &[std::ops::Range<usize>],
+    color: bool,
+    budget: usize,
+) -> std::io::Result<()> {
     let mut sorted: Vec<_> = ranges.to_vec();
     sorted.sort_by_key(|r| r.start);
-    let mut out = String::with_capacity(text.len() + ranges.len() * 16);
+    let mut segments: Vec<(&str, bool)> = Vec::new();
     let mut cursor = 0;
     for r in sorted {
         if r.start < cursor || r.end > text.len() {
             continue;
         }
-        out.push_str(&text[cursor..r.start]);
-        out.push_str("\x1b[38;5;208m");
-        out.push_str(&text[r.start..r.end]);
-        out.push_str("\x1b[0m");
+        if r.start > cursor {
+            segments.push((&text[cursor..r.start], false));
+        }
+        segments.push((&text[r.start..r.end], true));
         cursor = r.end;
     }
-    out.push_str(&text[cursor..]);
-    out
+    segments.push((&text[cursor..], false));
+
+    let mut left = budget;
+    let mut last_space = true;
+    for (segment, highlighted) in segments {
+        if color {
+            out.write_all(if highlighted {
+                b"\x1b[38;5;208m"
+            } else {
+                b"\x1b[2m"
+            })?;
+        }
+        for ch in segment.chars() {
+            let ch = if ch.is_whitespace() { ' ' } else { ch };
+            if ch == ' ' && last_space {
+                continue;
+            }
+            if left == 0 {
+                if color {
+                    out.write_all(b"\x1b[0m")?;
+                }
+                return write!(out, "…");
+            }
+            let mut buf = [0u8; 4];
+            out.write_all(ch.encode_utf8(&mut buf).as_bytes())?;
+            last_space = ch == ' ';
+            left -= 1;
+        }
+        if color {
+            out.write_all(b"\x1b[0m")?;
+        }
+    }
+    Ok(())
 }
 
 fn shorten_home(path: &str) -> String {
